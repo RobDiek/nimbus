@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nimbus — Dein KI-Computer in der Cloud</title>
+<style>
+:root{
+  --bg:#0a0b0f; --bg2:#12141c; --card:#161923; --line:#242838;
+  --txt:#e7e9f0; --mut:#9aa0b4; --acc:#6d7cff; --acc2:#41e0c4; --glow:rgba(109,124,255,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+.ic{width:22px;height:22px;stroke:currentColor;stroke-width:1.7;fill:none;stroke-linecap:round;stroke-linejoin:round}
+/* nav */
+nav{position:sticky;top:0;z-index:50;backdrop-filter:blur(14px);background:rgba(10,11,15,.7);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;justify-content:space-between;height:64px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:-.02em}
+.logo .dot{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 0 24px var(--glow)}
+.navlinks{display:flex;gap:28px;align-items:center;color:var(--mut);font-size:14px}
+.navlinks a:hover{color:var(--txt)}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:10px;font-weight:600;font-size:14px;cursor:pointer;border:1px solid transparent;transition:.15s}
+.btn-primary{background:linear-gradient(135deg,var(--acc),#8b74ff);color:#fff;box-shadow:0 8px 30px -8px var(--glow)}
+.btn-primary:hover{transform:translateY(-1px)}
+.btn-ghost{border-color:var(--line);color:var(--txt)}
+.btn-ghost:hover{border-color:var(--acc)}
+/* hero */
+.hero{position:relative;padding:120px 0 90px;text-align:center;overflow:hidden}
+.hero::before{content:"";position:absolute;top:-30%;left:50%;transform:translateX(-50%);width:900px;height:700px;background:radial-gradient(circle,var(--glow),transparent 60%);filter:blur(30px);opacity:.6;z-index:0;animation:heroGlow 8s ease-in-out infinite alternate}
+@keyframes heroGlow{from{opacity:.45;transform:translateX(-50%) scale(1)}to{opacity:.7;transform:translateX(-52%) scale(1.08)}}
+.hero>*{position:relative;z-index:1}
+.pill{display:inline-flex;gap:9px;align-items:center;padding:6px 14px;border:1px solid var(--line);border-radius:999px;font-size:13px;color:var(--mut);margin-bottom:28px;background:var(--card)}
+.pill b{color:var(--acc2)}
+.pill .ic{width:15px;height:15px;color:var(--acc2)}
+h1{font-size:clamp(38px,6vw,68px);line-height:1.04;letter-spacing:-.03em;font-weight:800;margin-bottom:22px}
+h1 .grad{background:linear-gradient(120deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{font-size:clamp(17px,2.4vw,21px);color:var(--mut);max-width:640px;margin:0 auto 38px}
+.cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.hero .btn{padding:14px 26px;font-size:15px}
+/* stagger-in beim Laden */
+.hero .pill,.hero h1,.hero .sub,.hero .cta,.hero .demo{animation:rise .7s cubic-bezier(.2,.7,.3,1) backwards}
+.hero h1{animation-delay:.08s}.hero .sub{animation-delay:.16s}.hero .cta{animation-delay:.24s}.hero .demo{animation-delay:.36s}
+@keyframes rise{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
+/* terminal mock */
+.demo{margin:70px auto 0;max-width:860px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--bg2);box-shadow:0 40px 120px -40px rgba(0,0,0,.8)}
+.demo .bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--card)}
+.demo .bar i{width:12px;height:12px;border-radius:50%;display:inline-block}
+.demo .bar i:nth-child(1){background:#ff5f57}.demo .bar i:nth-child(2){background:#febc2e}.demo .bar i:nth-child(3){background:#28c840}
+.demo .bar span{margin-left:10px;color:var(--mut);font-size:13px}
+.demo .body{padding:22px;font:13.5px/1.7 "SF Mono",ui-monospace,Menlo,monospace;text-align:left;min-height:230px}
+.demo .body .u{color:var(--acc2)}.demo .body .a{color:var(--txt)}.demo .body .t{color:var(--mut)}
+.cursor{display:inline-block;width:8px;height:16px;background:var(--acc2);vertical-align:middle;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+/* sections */
+section{padding:90px 0}
+.eyebrow{color:var(--acc2);font-weight:600;font-size:13px;letter-spacing:.08em;text-transform:uppercase;text-align:center;margin-bottom:14px}
+.h2{font-size:clamp(28px,4vw,42px);font-weight:800;letter-spacing:-.02em;text-align:center;margin-bottom:16px}
+.lead{color:var(--mut);text-align:center;max-width:600px;margin:0 auto 56px;font-size:17px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px;transition:border-color .2s, transform .2s}
+.card:hover{border-color:var(--acc);transform:translateY(-3px)}
+.card .ico{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,rgba(109,124,255,.18),rgba(65,224,196,.14));margin-bottom:16px;color:var(--acc2)}
+.card h3{font-size:17px;margin-bottom:8px;letter-spacing:-.01em}
+.card p{color:var(--mut);font-size:14.5px}
+.card .num{font-size:19px;font-weight:800;color:var(--acc2)}
+/* capabilities list */
+.caps{display:grid;grid-template-columns:repeat(2,1fr);gap:14px 40px;max-width:840px;margin:0 auto}
+@media(max-width:720px){.caps{grid-template-columns:1fr}}
+.cap{display:flex;gap:14px;align-items:flex-start;padding:16px 0;border-bottom:1px solid var(--line)}
+.cap .k{color:var(--acc2);margin-top:2px}
+.cap b{display:block;margin-bottom:2px}
+.cap span{color:var(--mut);font-size:14px}
+/* scroll reveal */
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .6s cubic-bezier(.2,.7,.3,1), transform .6s cubic-bezier(.2,.7,.3,1)}
+.reveal.in{opacity:1;transform:none}
+.grid .reveal:nth-child(2){transition-delay:.07s}.grid .reveal:nth-child(3){transition-delay:.14s}
+.grid .reveal:nth-child(4){transition-delay:.07s}.grid .reveal:nth-child(5){transition-delay:.14s}.grid .reveal:nth-child(6){transition-delay:.21s}
+.caps .reveal:nth-child(even){transition-delay:.08s}
+/* cta band */
+.band{margin:40px auto;max-width:1120px;text-align:center;background:linear-gradient(135deg,rgba(109,124,255,.12),rgba(65,224,196,.08));border:1px solid var(--line);border-radius:24px;padding:64px 24px}
+.band h2{font-size:clamp(26px,4vw,38px);font-weight:800;margin-bottom:14px;letter-spacing:-.02em}
+.band p{color:var(--mut);margin-bottom:28px}
+footer{border-top:1px solid var(--line);padding:40px 0;color:var(--mut);font-size:14px}
+footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M6.5 18.5c-2.5 0-4.5-2-4.5-4.5 0-2.1 1.5-3.9 3.4-4.4C6 6.9 8.3 5 11 5c3 0 5.4 2.2 5.9 5 2.3.1 4.1 2 4.1 4.3 0 2.3-1.9 4.2-4.2 4.2H6.5z"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 3-3 3M12.5 15.5H17"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.8 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.8-3.8-9S9.5 5.7 12 3z"/></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M12 15c-2-1-3-2-4-4C9.5 5.5 14 3.5 20 4c.5 6-1.5 10.5-7 12-1 .5-1 1-1-1zM8 11l-4 1.5L7 15M13 16l1.5 4L17 17M5 19c1-1 2-1.5 3-1"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 4a3 3 0 0 0-3 3 3 3 0 0 0-2.8 4A3 3 0 0 0 7 17a3 3 0 0 0 5 2.2A3 3 0 0 0 17 17a3 3 0 0 0 .8-6A3 3 0 0 0 15 7a3 3 0 0 0-3-3zM12 4v15"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3M18 9h3m-3 6h3"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="7" rx="1.5"/><rect x="3.5" y="13" width="17" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+    <symbol id="i-loop" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6"/></symbol>
+  </defs>
+</svg>
+
+<nav><div class="wrap">
+  <div class="logo"><span class="dot"></span>Nimbus</div>
+  <div class="navlinks">
+    <a href="#features">Features</a>
+    <a href="#caps">Fähigkeiten</a>
+    <a href="#how">So funktioniert's</a>
+    <a class="btn btn-primary" href="/app">App öffnen →</a>
+  </div>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <div class="pill"><svg class="ic"><use href="#i-cloud"/></svg><b>Neu</b> · Dein persönlicher KI-Computer in der Cloud</div>
+  <h1>Nicht nur ein Chatbot.<br><span class="grad">Ein ganzer Rechner mit KI.</span></h1>
+  <p class="sub">Nimbus ist ein persönlicher Cloud-Server mit eingebautem Agenten — echtes Terminal, Dateisystem, Services, Datenbanken und Web-Zugriff. Er <b>tut</b> Dinge, statt nur zu antworten.</p>
+  <div class="cta">
+    <a class="btn btn-primary" href="/app">Computer starten →</a>
+    <a class="btn btn-ghost" href="#how">So funktioniert's</a>
+  </div>
+
+  <div class="demo">
+    <div class="bar"><i></i><i></i><i></i><span>nimbus — ~/workspace</span></div>
+    <div class="body" id="typed"></div>
+  </div>
+</div></header>
+
+<section id="features"><div class="wrap">
+  <div class="eyebrow reveal">Ein echter Rechner</div>
+  <div class="h2 reveal">Alles, was ein Server kann — gesteuert per Sprache</div>
+  <p class="lead reveal">Kein DevOps-Overhead. Sag, was du brauchst, und der Agent baut, deployt und betreibt es.</p>
+  <div class="grid">
+    <div class="card reveal"><div class="ico"><svg class="ic"><use href="#i-term"/></svg></div><h3>Volles Terminal (root)</h3><p>Shell-Befehle, Paketinstallation, Scripting mit Bun, Python, Bash & Node — direkt ausgeführt.</p></div>
+    <div class="card reveal"><div class="ico"><svg class="ic"><use href="#i-folder"/></svg></div><h3>Dateisystem</h3><p>Lesen, schreiben, bearbeiten, kopieren, löschen. Kompletter Zugriff auf dein Workspace.</p></div>
+    <div class="card reveal"><div class="ico"><svg class="ic"><use href="#i-globe"/></svg></div><h3>Web & Recherche</h3><p>Websuche, Deep Research, Seiten als Text extrahieren — direkt aus dem Chat.</p></div>
+    <div class="card reveal"><div class="ico"><svg class="ic"><use href="#i-rocket"/></svg></div><h3>Hosting out of the box</h3><p>Websites, APIs & Services live stellen — ohne Deploy-Pipeline. Einfach starten.</p></div>
+    <div class="card reveal"><div class="ico"><svg class="ic"><use href="#i-clock"/></svg></div><h3>Scheduled Agents</h3><p>Wiederkehrende Tasks per Cron: Morgen-Briefing, Server-Watching, Reports — autonom.</p></div>
+    <div class="card reveal"><div class="ico"><svg class="ic"><use href="#i-brain"/></svg></div><h3>Memory & Personas</h3><p>Persistentes Wissen über dich, konfigurierbare KI-Persönlichkeiten & Verhaltensregeln.</p></div>
+  </div>
+</div></section>
+
+<section id="caps" style="background:var(--bg2);border-block:1px solid var(--line)"><div class="wrap">
+  <div class="eyebrow reveal">Fähigkeiten</div>
+  <div class="h2 reveal">Ein Agent, der aktiv Dinge tut</div>
+  <p class="lead reveal">Root-Zugriff auf deinen persönlichen Cloud-Server. Er bearbeitet Dateien, deployt Code, hostet Services, recherchiert und führt getimte Jobs aus.</p>
+  <div class="caps">
+    <div class="cap reveal"><svg class="ic k"><use href="#i-cpu"/></svg><div><b>System & Dateien</b><span>Terminal, Filesystem, Prozesse, Datenbanken (PostgreSQL, SQLite, DuckDB).</span></div></div>
+    <div class="cap reveal"><svg class="ic k"><use href="#i-search"/></svg><div><b>Web-Automatisierung</b><span>Websuche, Seitenanalyse, Browser-Ansicht mit Text-Extraktion.</span></div></div>
+    <div class="cap reveal"><svg class="ic k"><use href="#i-mail"/></svg><div><b>Kommunikation</b><span>E-Mail (Gmail/Outlook) und Telegram — als Integrationen anbindbar.</span></div></div>
+    <div class="cap reveal"><svg class="ic k"><use href="#i-server"/></svg><div><b>Hosting & Dev</b><span>Instant Routes, Full-Stack-Sites, User-Services, eigene Prozesse.</span></div></div>
+    <div class="cap reveal"><svg class="ic k"><use href="#i-clock"/></svg><div><b>Automatisierung</b><span>Scheduled Agents per Cron — laufen selbstständig im Hintergrund.</span></div></div>
+    <div class="cap reveal"><svg class="ic k"><use href="#i-loop"/></svg><div><b>Selbst-Invokation</b><span>Agent legt eigene Tasks & Services an — Workflow-Orchestrierung inklusive.</span></div></div>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <div class="eyebrow reveal">So funktioniert's</div>
+  <div class="h2 reveal">In drei Schritten produktiv</div>
+  <div class="grid" style="margin-top:40px">
+    <div class="card reveal"><div class="ico"><span class="num">1</span></div><h3>Key hinterlegen</h3><p>Bring Your Own Key: Trage deinen Anthropic-Key ein. Deine Daten bleiben auf deinem Server.</p></div>
+    <div class="card reveal"><div class="ico"><span class="num">2</span></div><h3>Auftrag geben</h3><p>„Baue mir eine API“, „überwache den Server“, „recherchiere X“ — in natürlicher Sprache.</p></div>
+    <div class="card reveal"><div class="ico"><span class="num">3</span></div><h3>Agent handelt</h3><p>Nimbus führt Befehle aus, schreibt Dateien, deployt Services und meldet das Ergebnis.</p></div>
+  </div>
+</div></section>
+
+<div class="band reveal">
+  <h2>Starte deinen KI-Computer</h2>
+  <p>Kein Setup, kein DevOps. Öffne die App und leg los.</p>
+  <a class="btn btn-primary" href="/app" style="padding:14px 30px;font-size:16px">Nimbus öffnen →</a>
+</div>
+
+<footer><div class="wrap">
+  <div class="logo"><span class="dot"></span>Nimbus</div>
+  <div>Ein persönlicher KI-Computer · Inspiriert von zo.computer · Gebaut mit Bun</div>
+</div></footer>
+
+<script>
+// Terminal-Demo-Animation
+const lines = [
+  {c:'u',t:'› baue mir eine To-Do-API und starte sie als Service'},
+  {c:'t',t:'  ⚙ run_command  ·  bun init & schreibe server.ts'},
+  {c:'t',t:'  ⚙ write_file   ·  /workspace/todo/server.ts'},
+  {c:'t',t:'  ⚙ start_service ·  todo-api → :8080 [running]'},
+  {c:'a',t:'✓ Fertig. Die API läuft auf Port 8080. Endpoints: GET/POST /todos.'},
+  {c:'u',t:'› jeden Morgen um 7 Uhr die Server-Logs prüfen'},
+  {c:'t',t:'  ⚙ schedule_task · „log-watch“ cron 0 7 * * *'},
+  {c:'a',t:'✓ Geplanter Agent aktiv. Läuft täglich um 07:00 autonom.'},
+];
+const el = document.getElementById('typed');
+let li=0, ci=0;
+function tick(){
+  if(li>=lines.length){el.innerHTML+='<span class="cursor"></span>';return;}
+  const line=lines[li];
+  if(ci===0) el.innerHTML+=`<div class="${line.c}"></div>`;
+  const div=el.lastChild;
+  div.textContent=line.t.slice(0,++ci);
+  if(ci>=line.t.length){li++;ci=0;setTimeout(tick, li===lines.length?100:420);}
+  else setTimeout(tick, 18+Math.random()*22);
+}
+tick();
+
+// Scroll-Reveal
+const io = new IntersectionObserver((entries)=>{
+  for(const e of entries){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target);} }
+},{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>

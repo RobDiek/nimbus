@@ -1,0 +1,10 @@
+{
+  "name": "nimbus",
+  "version": "1.0.0",
+  "description": "Nimbus – ein persönlicher KI-Computer in der Cloud (zo.computer-Klon)",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/server.js",
+    "dev": "bun --watch src/server.js"
+  }
+}

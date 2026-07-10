@@ -1,0 +1,15 @@
+# Laufzeit-Zustand
+data/
+workspace/
+
+# Logs
+*.log
+
+# Abhängigkeiten (falls je welche dazukommen)
+node_modules/
+
+# OS / Editor
+.DS_Store
+*.swp
+.vscode/
+.idea/

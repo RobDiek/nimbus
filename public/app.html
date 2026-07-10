@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Nimbus — Mein Space</title>
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.8 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.8-3.8-9S9.5 5.7 12 3z"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4.5v-6h-5v6H5a1 1 0 0 1-1-1v-9.5z"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8A2 2 0 0 1 21 9.5V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5m6-5v5M7 8h10v3a5 5 0 0 1-5 5 5 5 0 0 1-5-5V8zM12 16v5"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.3L19 10l-5.1 1.7L12 17l-1.9-5.3L5 10l5.1-1.7L12 3zM19 15l.9 2.4L22 18l-2.1.8L19 21l-.9-2.2L16 18l2.1-.6L19 15z"/></symbol>
+    <symbol id="i-browser" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 9h18M6.2 6.8h.01M8.7 6.8h.01M11.2 6.8h.01"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="7" rx="1.5"/><rect x="3.5" y="13" width="17" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 3-3 3M12.5 15.5H17"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.4-4.4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3H9.8l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4.4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m3 0-1 13a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1L6 7"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM14 3v4h4"/></symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/><rect x="9.5" y="9.5" width="5" height="5"/><path d="M9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3M18 9h3m-3 6h3"/></symbol>
+    <symbol id="i-ram" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="9" rx="1.5"/><path d="M7 17v2.5M12 17v2.5M17 17v2.5M7 11v3m5-3v3m5-3v3"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 5.5v13l11-6.5-11-6.5z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 4a3 3 0 0 0-3 3 3 3 0 0 0-2.8 4A3 3 0 0 0 7 17a3 3 0 0 0 5 2.2A3 3 0 0 0 17 17a3 3 0 0 0 .8-6A3 3 0 0 0 15 7a3 3 0 0 0-3-3zM12 4v15"/></symbol>
+    <symbol id="i-doc" viewBox="0 0 24 24"><path d="M6 3h8l4 4v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M9 12h6M9 15.5h6M9 8.5h2"/></symbol>
+  </defs>
+</svg>
+
+<div id="app">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="side">
+    <div class="side-top">
+      <a class="brand" href="/" title="Zur Landing Page">
+        <span class="brand-mark"><svg viewBox="0 0 24 24"><path d="M6.5 17.5c-2.2 0-4-1.8-4-4 0-1.9 1.3-3.4 3-3.9C5.8 6.9 8.1 5 11 5c2.6 0 4.8 1.6 5.6 3.9 2.1.2 3.9 2 3.9 4.3 0 2.4-1.9 4.3-4.3 4.3h-9.7z" fill="currentColor" stroke="none"/></svg></span>
+      </a>
+      <button class="collapse-btn" title="Sidebar einklappen"><svg class="ic"><use href="#i-chev"/></svg></button>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item" data-view="space"><svg class="ic"><use href="#i-globe"/></svg><span>Mein Nimbus Space</span></button>
+      <button class="nav-item active" data-view="start"><svg class="ic"><use href="#i-home"/></svg><span>Start</span></button>
+      <button class="nav-item" data-view="files"><svg class="ic"><use href="#i-folder"/></svg><span>Dateien</span><svg class="ic nav-extra"><use href="#i-search"/></svg></button>
+      <button class="nav-item" data-view="automations"><svg class="ic"><use href="#i-clock"/></svg><span>Automatisierungen</span></button>
+      <button class="nav-item" data-view="integrations"><svg class="ic"><use href="#i-plug"/></svg><span>Integrationen</span></button>
+      <button class="nav-item" data-view="skills"><svg class="ic"><use href="#i-spark"/></svg><span>Fähigkeiten</span></button>
+      <button class="nav-item" data-view="browser"><svg class="ic"><use href="#i-browser"/></svg><span>Browser</span></button>
+      <button class="nav-item" data-view="hosting"><svg class="ic"><use href="#i-server"/></svg><span>Hosting</span></button>
+      <button class="nav-item" data-view="terminal"><svg class="ic"><use href="#i-term"/></svg><span>Terminal</span></button>
+    </nav>
+
+    <div class="chat-search">
+      <svg class="ic"><use href="#i-search"/></svg>
+      <input id="chatSearch" placeholder="Chats durchsuchen" autocomplete="off" />
+    </div>
+
+    <div class="recent">
+      <div class="recent-head"><span>Zuletzt</span><a id="viewAll">Alle anzeigen</a></div>
+      <div id="recentList" class="recent-list"></div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <header class="topbar">
+      <div class="badge-row">
+        <span class="hbadge"><svg class="ic"><use href="#i-home"/></svg>diekerit.nimbus.computer</span>
+        <span class="hbadge"><svg class="ic"><use href="#i-globe"/></svg>diekerit.nimbus.space</span>
+        <span class="hbadge"><svg class="ic"><use href="#i-mail"/></svg>diekerit@nimbus.computer</span>
+      </div>
+      <div class="badge-row sub">
+        <span class="hbadge" id="bCores"><svg class="ic"><use href="#i-cpu"/></svg>– cores</span>
+        <span class="hbadge" id="bMem"><svg class="ic"><use href="#i-ram"/></svg>– GB</span>
+        <span class="hbadge key-badge" id="bKey" title="API-Key-Status">●</span>
+      </div>
+    </header>
+
+    <!-- START (Chat) -->
+    <section class="view active" data-view="start">
+      <div id="chatArea" class="chat-area empty">
+        <div id="messages" class="messages"></div>
+        <div class="composer-zone">
+          <div id="noKeyBanner" class="nokey-banner" hidden>
+            Kein Anthropic API-Key hinterlegt. <a data-goto="space">Jetzt in „Mein Nimbus Space“ eintragen →</a>
+          </div>
+          <div class="composer">
+            <textarea id="input" rows="2" placeholder="Wobei kann Nimbus helfen?"></textarea>
+            <div class="composer-row">
+              <span class="composer-logo"><svg viewBox="0 0 24 24"><path d="M6.5 17.5c-2.2 0-4-1.8-4-4 0-1.9 1.3-3.4 3-3.9C5.8 6.9 8.1 5 11 5c2.6 0 4.8 1.6 5.6 3.9 2.1.2 3.9 2 3.9 4.3 0 2.4-1.9 4.3-4.3 4.3h-9.7z" fill="currentColor" stroke="none"/></svg></span>
+              <div class="persona-drop">
+                <select id="personaSel" title="Persona wählen"></select>
+              </div>
+              <button id="newChat" class="round-btn" title="Neuer Chat"><svg class="ic"><use href="#i-plus"/></svg></button>
+              <div class="grow"></div>
+              <button id="send" class="send-btn" disabled>Senden</button>
+            </div>
+          </div>
+          <div class="chips" id="chips">
+            <button class="chip-tool" id="chipRefresh" title="Neue Vorschläge"><svg class="ic"><use href="#i-refresh"/></svg></button>
+            <span id="chipList"></span>
+            <button class="chip-tool" id="chipHide" title="Ausblenden"><svg class="ic"><use href="#i-x"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MEIN SPACE -->
+    <section class="view" data-view="space">
+      <div class="page">
+        <h1 class="page-title">Mein Nimbus Space</h1>
+        <p class="page-sub">Dein persönlicher KI-Computer — Status, Schlüssel & Wissen.</p>
+        <div class="stat-grid" id="statGrid"></div>
+
+        <h2 class="sec-title">Bring Your Own Key</h2>
+        <div class="card form-card">
+          <label>Anthropic API-Key <span class="mut">(bleibt lokal in der SQLite-DB)</span></label>
+          <input id="apiKey" type="password" placeholder="sk-ant-…" />
+          <label>Standard-Modell</label>
+          <select id="modelSel">
+            <option value="claude-sonnet-5">Claude Sonnet 5 (empfohlen)</option>
+            <option value="claude-fable-5">Claude Fable 5</option>
+            <option value="claude-opus-4-8">Claude Opus 4.8</option>
+            <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+          </select>
+          <div><button id="saveSettings" class="btn dark">Speichern</button> <span id="settingsMsg" class="mut"></span></div>
+        </div>
+
+        <h2 class="sec-title">Memory</h2>
+        <div class="card form-card row-form">
+          <input id="memContent" placeholder="Fakt merken … (z. B. „Robin bevorzugt Bun statt Node“)" />
+          <input id="memTags" placeholder="Tags" style="max-width:160px" />
+          <button id="memAdd" class="btn dark">Merken</button>
+        </div>
+        <div id="memList" class="cardlist"></div>
+      </div>
+    </section>
+
+    <!-- DATEIEN -->
+    <section class="view" data-view="files">
+      <div class="files-layout">
+        <div class="file-pane">
+          <div class="pane-head"><span id="filePath" class="mono mut">/workspace</span></div>
+          <div class="file-list" id="fileList"></div>
+        </div>
+        <div class="file-editor">
+          <div class="editor-bar"><span id="editorName" class="mut">Keine Datei geöffnet</span><button id="saveFile" class="btn" disabled>Speichern</button></div>
+          <textarea id="fileContent" placeholder="Datei auswählen zum Bearbeiten …" spellcheck="false"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <!-- AUTOMATISIERUNGEN -->
+    <section class="view" data-view="automations">
+      <div class="page">
+        <h1 class="page-title">Automatisierungen</h1>
+        <p class="page-sub">Geplante Agenten, die selbstständig laufen — Cron-Syntax: <span class="mono">Min Std Tag Monat Wochentag</span></p>
+        <div class="card form-card">
+          <div class="row-form">
+            <input id="taskName" placeholder="Name (z. B. Morgen-Briefing)" />
+            <input id="taskCron" placeholder="0 7 * * *" class="mono" style="max-width:180px" />
+          </div>
+          <textarea id="taskPrompt" rows="2" placeholder="Auftrag an den Agenten …"></textarea>
+          <div><button id="taskAdd" class="btn dark">Automatisierung anlegen</button></div>
+        </div>
+        <div id="taskList" class="cardlist"></div>
+      </div>
+    </section>
+
+    <!-- INTEGRATIONEN -->
+    <section class="view" data-view="integrations">
+      <div class="page">
+        <h1 class="page-title">Integrationen</h1>
+        <p class="page-sub">Verbinde Nimbus mit deinen Diensten. <span class="mut">(Demo — OAuth-Flows sind in der lokalen Version nicht konfiguriert.)</span></p>
+        <div class="int-grid" id="intGrid"></div>
+      </div>
+    </section>
+
+    <!-- FÄHIGKEITEN (Personas) -->
+    <section class="view" data-view="skills">
+      <div class="page">
+        <h1 class="page-title">Fähigkeiten</h1>
+        <p class="page-sub">Personas: konfigurierbare KI-Persönlichkeiten mit eigenem Prompt & Modell.</p>
+        <div class="card form-card">
+          <div class="row-form">
+            <input id="pName" placeholder="Name" />
+            <input id="pModel" placeholder="Modell (leer = Standard)" class="mono" />
+            <input type="hidden" id="pId" />
+          </div>
+          <textarea id="pPrompt" rows="3" placeholder="System-Prompt / Persönlichkeit …"></textarea>
+          <div><button id="pSave" class="btn dark">Speichern</button> <button id="pClear" class="btn">Leeren</button></div>
+        </div>
+        <div id="personaList" class="cardlist"></div>
+      </div>
+    </section>
+
+    <!-- BROWSER -->
+    <section class="view" data-view="browser">
+      <div class="browser-bar">
+        <svg class="ic mut"><use href="#i-globe"/></svg>
+        <input id="urlInput" placeholder="https:// … (Enter zum Laden)" autocomplete="off" />
+        <button id="urlGo" class="btn">Laden</button>
+        <button id="urlText" class="btn" title="Seite als Text extrahieren (umgeht Frame-Sperren)">Als Text</button>
+      </div>
+      <div class="browser-body">
+        <iframe id="browserFrame" sandbox="allow-scripts allow-same-origin allow-forms" hidden></iframe>
+        <pre id="browserText" class="browser-text" hidden></pre>
+        <div id="browserHint" class="browser-hint">
+          <svg class="ic big"><use href="#i-browser"/></svg>
+          <p>Gib eine URL ein. Viele Seiten blockieren Frames — nutze dann „Als Text“.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOSTING (Services) -->
+    <section class="view" data-view="hosting">
+      <div class="page">
+        <h1 class="page-title">Hosting</h1>
+        <p class="page-sub">Langlebige Prozesse: HTTP-Server, Worker, APIs — ohne DevOps-Overhead.</p>
+        <div class="card form-card row-form">
+          <input id="svcName" placeholder="Name (z. B. web)" style="max-width:180px" />
+          <input id="svcCmd" placeholder="Befehl (z. B. python3 -m http.server 8080)" class="mono" />
+          <button id="svcStart" class="btn dark">Starten</button>
+        </div>
+        <div id="svcList" class="cardlist"></div>
+        <h2 class="sec-title" id="logTitle">Logs</h2>
+        <pre id="svcLogs" class="logs card"></pre>
+      </div>
+    </section>
+
+    <!-- TERMINAL -->
+    <section class="view" data-view="terminal">
+      <div class="term-wrap">
+        <div class="term-window">
+          <div class="term-titlebar">
+            <span class="tdot r"></span><span class="tdot y"></span><span class="tdot g"></span>
+            <span class="term-title mono">nimbus — bash — /workspace</span>
+            <span class="term-status mono" id="termStatus">offline</span>
+          </div>
+          <div id="termOut" class="term-out mono"></div>
+          <div class="term-in">
+            <span class="prompt mono" id="termPrompt">nimbus:~$</span>
+            <input id="termCmd" class="mono" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="/js/app.js"></script>
+</body>
+</html>
