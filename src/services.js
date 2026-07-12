@@ -42,7 +42,7 @@ async function pipeStream(stream, entry, prefix) {
 }
 
 export const services = {
-  start(tenantId, name, command, cwd, workspaceRoot = WORKSPACE) {
+  start(tenantId, name, command, cwd, workspaceRoot = WORKSPACE, extraEnv = {}) {
     const tId = normalizeTenantId(tenantId);
     const key = runtimeKey(tId, name);
     if (running.has(key)) return { error: `Service '${name}' läuft bereits.` };
@@ -52,6 +52,7 @@ export const services = {
       cwd: resolvedCwd,
       stdout: "pipe",
       stderr: "pipe",
+      env: { ...process.env, ...(extraEnv && typeof extraEnv === "object" ? extraEnv : {}) },
     });
 
     const entry = { proc, logs: [], command, tenantId: tId, name };

@@ -626,6 +626,18 @@ async function loadIntegrations() {
 }
 
 /* ============ Fähigkeiten (SKILL.md + Personas) ============ */
+async function loadSkillDetail(id) {
+  const out = $("#skillTestOut");
+  const r = await api.get("/api/skills/" + encodeURIComponent(id));
+  if (r.error || !r.skill) {
+    out.textContent = "Fehler: " + (r.error || "Skill nicht gefunden");
+    return;
+  }
+  $("#skillDetailId").value = r.skill.id;
+  $("#skillContent").value = r.skill.content || "";
+  out.textContent = `Skill geladen: ${r.skill.name}\nScopes: ${(r.skill.scopes || []).join(", ")}\nTriggers: ${(r.skill.triggers || []).join(", ")}`;
+}
+
 async function loadSkills() {
   const { skills } = await api.get("/api/skills");
   const list = $("#skillList");
@@ -637,7 +649,14 @@ async function loadSkills() {
       <div class="grow"><h3>${esc(s.name)} <span class="badge ${s.enabled ? "on" : "off"}">${s.enabled ? "aktiv" : "aus"}</span></h3>
       <p>${esc(s.description || "Keine Beschreibung")}</p>
       <div class="meta">${esc((s.scopes || []).join(", "))}${s.source_path ? " · " + esc(s.source_path) : ""}</div></div>
-      <button class="icon-btn" data-a="toggle">${s.enabled ? "Deaktivieren" : "Aktivieren"}</button>`;
+      <div style="display:flex;gap:6px">
+        <button class="icon-btn" data-a="detail">Details</button>
+        <button class="icon-btn" data-a="toggle">${s.enabled ? "Deaktivieren" : "Aktivieren"}</button>
+      </div>`;
+    c.querySelector('[data-a="detail"]').onclick = async () => {
+      await loadSkillDetail(s.id);
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    };
     c.querySelector('[data-a="toggle"]').onclick = async () => {
       await api.post("/api/skills/toggle", { id: s.id, enabled: !s.enabled });
       loadSkills();
@@ -656,6 +675,41 @@ $("#skillCreate").onclick = async () => {
   });
   $("#skillName").value = ""; $("#skillScopes").value = ""; $("#skillRules").value = "";
   loadSkills();
+};
+
+$("#skillLoadDetail").onclick = async () => {
+  const id = $("#skillDetailId").value.trim();
+  if (!id) return;
+  await loadSkillDetail(id);
+};
+
+$("#skillSaveDetail").onclick = async () => {
+  const id = $("#skillDetailId").value.trim();
+  if (!id) return;
+  const r = await api.post("/api/skills/update", {
+    id: Number(id),
+    content: $("#skillContent").value || "",
+  });
+  $("#skillTestOut").textContent = r.ok ? "SKILL.md gespeichert." : ("Fehler: " + (r.error || "update failed"));
+  if (r.ok) loadSkills();
+};
+
+$("#skillTestRun").onclick = async () => {
+  const id = $("#skillDetailId").value.trim();
+  if (!id) return;
+  const prompt = $("#skillTestPrompt").value.trim();
+  const r = await api.post("/api/skills/test", {
+    skill_id: Number(id),
+    prompt,
+  });
+  if (r.ok) {
+    const errors = (r.events || []).filter((e) => e.type === "error");
+    $("#skillTestOut").textContent =
+      `Test ok\nEvents: ${(r.events || []).length}\n` +
+      (errors.length ? `Scope/Fehler:\n${errors.map((e) => JSON.stringify(e)).join("\n")}` : "Keine Fehler.");
+  } else {
+    $("#skillTestOut").textContent = `Test fehlgeschlagen:\n${r.error || "unknown"}\n\nEvents:\n${JSON.stringify(r.events || [], null, 2)}`;
+  }
 };
 
 async function loadPersonas() {

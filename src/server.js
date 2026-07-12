@@ -39,10 +39,10 @@ import { logger } from "./logger.js";
 import { config } from "./config.js";
 import { getVmStatus, createVmSshPty } from "./proxmox.js";
 import { vmOrchestrator } from "./vm-orchestrator.js";
-import { createSkillFile, getSkillByNameOrId, listSkills, scanSkills, setSkillEnabled, buildSkillSystemAppendix } from "./skills.js";
+import { createSkillFile, getSkillByNameOrId, importSkillFromContent, listSkills, scanSkills, setSkillEnabled, buildSkillSystemAppendix } from "./skills.js";
 import { browserClick, browserOpen, browserScreenshot, browserSubmit, createBrowserSession, getBrowserSession, listBrowserSessions } from "./browser.js";
 import { completeOAuth, disconnectOAuth, listOAuthProviders, saveManualToken, startOAuth } from "./oauth.js";
-import { deployService, healthCheck, latestDeployment, listDeployments, rollbackDeployment } from "./hosting.js";
+import { deployService, healthCheck, latestDeployment, latestHealthyDeployment, listDeploymentEvents, listDeployments, rollbackDeployment } from "./hosting.js";
 
 const PUBLIC = join(ROOT, "public");
 const PORT = config.port;
@@ -472,6 +472,34 @@ const routes = {
     const b = await body(req);
     return json(setSkillEnabled(tenantContext, Number(b.id), !!b.enabled));
   },
+  "POST /api/skills/update": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    const skill = getSkillByNameOrId(tenantContext, b.id || b.skill_id || b.name);
+    if (!skill) return json({ error: "Skill nicht gefunden." }, 404);
+
+    const sourcePath = b.source_path || skill.source_path || "";
+    const content = String(b.content || "");
+    if (!sourcePath) return json({ error: "source_path fehlt." }, 400);
+
+    await executeTool("write_file", { path: sourcePath, content }, tenantContext);
+    const updated = importSkillFromContent(tenantContext, { name: skill.name, content, sourcePath });
+    return json({ ok: true, skill: updated });
+  },
+  "POST /api/skills/test": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    const skill = getSkillByNameOrId(tenantContext, b.skill_id || b.skill || b.name);
+    if (!skill || !skill.enabled) return json({ error: "Skill nicht gefunden oder deaktiviert." }, 404);
+    const tc = { ...tenantContext, activeSkill: skill };
+    const { system } = buildSystem(b.persona_id || null, tc);
+    const messages = [{ role: "user", content: [{ type: "text", text: String(b.prompt || "") }] }];
+    const events = [];
+    try {
+      await runAgent({ messages, system, model: b.model || "", onEvent: (e) => events.push(e), tenantContext: tc });
+      return json({ ok: true, skill: { id: skill.id, name: skill.name, scopes: skill.scopes }, events });
+    } catch (err) {
+      return json({ ok: false, error: String(err?.message || err), events }, 400);
+    }
+  },
   "POST /api/skills/run": async (req, _url, tenantContext) => {
     const b = await body(req);
     const skill = getSkillByNameOrId(tenantContext, b.skill_id || b.skill || b.name);
@@ -511,6 +539,11 @@ const routes = {
 
   // --- Hosting Supervisor ---
   "GET /api/hosting/deployments": (_req, _url, tenantContext) => json({ deployments: listDeployments(tenantContext) }),
+  "GET /api/hosting/events": (_req, url, tenantContext) => {
+    const name = url.searchParams.get("name") || "";
+    const limit = Number(url.searchParams.get("limit") || 200);
+    return json({ events: listDeploymentEvents(tenantContext, name, limit) });
+  },
   "POST /api/hosting/deploy": async (req, _url, tenantContext) => json(deployService(tenantContext, await body(req))),
   "POST /api/hosting/health": async (req, _url, tenantContext) => {
     const b = await body(req);
@@ -708,6 +741,35 @@ async function handleDynamicApi(req, url, tenantContext) {
     }
 
     return json({ error: "Method not allowed." }, 405);
+  }
+
+  const mSkill = url.pathname.match(/^\/api\/skills\/(\d+)$/);
+  if (mSkill && req.method === "GET") {
+    const skill = getSkillByNameOrId(tenantContext, mSkill[1]);
+    if (!skill) return json({ error: "Skill nicht gefunden." }, 404);
+    return json({ skill });
+  }
+
+  const mHosted = url.pathname.match(/^\/_host\/([^\/]+)(\/.*)?$/);
+  if (mHosted && req.method === "GET") {
+    const serviceName = decodeURIComponent(mHosted[1] || "");
+    const suffix = mHosted[2] || "/";
+    const dep = latestHealthyDeployment(tenantContext, serviceName);
+    if (!dep || !dep.port) return new Response("Hosted service not available", { status: 404 });
+
+    try {
+      const targetUrl = `http://127.0.0.1:${dep.port}${suffix}`;
+      const upstream = await fetch(targetUrl, {
+        method: "GET",
+        headers: req.headers,
+        signal: AbortSignal.timeout(15000),
+      });
+      const h = new Headers(upstream.headers);
+      h.set("x-nimbus-proxy-service", serviceName);
+      return new Response(upstream.body, { status: upstream.status, headers: h });
+    } catch (err) {
+      return json({ error: `Proxy request failed: ${String(err?.message || err)}` }, 502);
+    }
   }
 
   const mShare = url.pathname.match(/^\/api\/share\/([A-Za-z0-9_\-]+)$/);

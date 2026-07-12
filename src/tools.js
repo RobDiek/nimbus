@@ -301,19 +301,31 @@ export const TOOL_DEFS = [
   },
   {
     name: "browser_click",
-    description: "Klickt in einer Browser-Session einen Link per Text oder Index.",
+    description: "Klickt in einer Browser-Session per Linktext, Index, CSS-Selector oder Koordinaten.",
     input_schema: {
       type: "object",
-      properties: { session_id: { type: "string" }, text: { type: "string" }, index: { type: "number" } },
+      properties: {
+        session_id: { type: "string" },
+        text: { type: "string" },
+        index: { type: "number" },
+        selector: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+      },
       required: ["session_id"],
     },
   },
   {
     name: "browser_submit",
-    description: "Sendet ein extrahiertes HTML-Formular in einer Browser-Session ab.",
+    description: "Sendet ein Formular in einer Browser-Session ab (optional per Selector).",
     input_schema: {
       type: "object",
-      properties: { session_id: { type: "string" }, form_index: { type: "number" }, fields: { type: "object" } },
+      properties: {
+        session_id: { type: "string" },
+        form_index: { type: "number" },
+        fields: { type: "object" },
+        selector: { type: "string" },
+      },
       required: ["session_id", "fields"],
     },
   },
@@ -380,6 +392,34 @@ function requireFields(input, fields) {
   }
 }
 
+function hasScope(skill, scope) {
+  if (!skill) return true;
+  const scopes = Array.isArray(skill.scopes) ? skill.scopes : [];
+  return scopes.includes("*") || scopes.includes(scope);
+}
+
+function enforceScopeOrThrow(skill, scope, detail = "") {
+  if (hasScope(skill, scope)) return;
+  throw new Error(`scope_violation: '${scope}' nicht erlaubt${detail ? ` (${detail})` : ""}.`);
+}
+
+function toolScopeRequirements(name) {
+  const filesRead = new Set(["read_file", "list_files"]);
+  const filesWrite = new Set(["write_file", "write_file_base64", "delete_path"]);
+  const networkTools = new Set(["web_search", "web_fetch", "run_command"]);
+  const browserTools = new Set(["browser_open", "browser_click", "browser_submit", "browser_screenshot"]);
+  const hostingTools = new Set(["deploy_hosting", "hosting_healthcheck", "hosting_rollback", "list_hosting_deployments"]);
+  const oauthTools = new Set(["list_oauth_integrations", "start_oauth_integration"]);
+
+  if (filesRead.has(name)) return ["files:read"];
+  if (filesWrite.has(name)) return ["files:write"];
+  if (networkTools.has(name)) return ["network:*"];
+  if (browserTools.has(name)) return ["browser:*"];
+  if (hostingTools.has(name)) return ["hosting:*"];
+  if (oauthTools.has(name)) return ["oauth:provider"];
+  return [];
+}
+
 const TOOL_REQUIREMENTS = {
   run_command: ["command"],
   read_file: ["path"],
@@ -410,7 +450,15 @@ export async function executeTool(name, input, tenantContext) {
 
   try {
     if (tenantContext?.activeSkill && !isToolAllowedBySkill(tenantContext.activeSkill, name)) {
-      throw new Error(`Tool '${name}' ist durch Skill-Scopes nicht erlaubt.`);
+      throw new Error(`scope_violation: Tool '${name}' ist durch Skill-Scopes nicht erlaubt.`);
+    }
+
+    if (tenantContext?.activeSkill) {
+      const scopes = toolScopeRequirements(name);
+      for (const s of scopes) enforceScopeOrThrow(tenantContext.activeSkill, s, name);
+      if (hasScope(tenantContext.activeSkill, "tools:*") === false && !isToolAllowedBySkill(tenantContext.activeSkill, name)) {
+        throw new Error(`scope_violation: tools:${name} nicht erlaubt.`);
+      }
     }
 
     const reqFields = TOOL_REQUIREMENTS[name];

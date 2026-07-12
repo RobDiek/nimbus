@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS skills (
   description TEXT NOT NULL DEFAULT '',
   scopes TEXT NOT NULL DEFAULT '[]',
   rules TEXT NOT NULL DEFAULT '[]',
+  triggers TEXT NOT NULL DEFAULT '[]',
   content TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -176,6 +177,34 @@ CREATE TABLE IF NOT EXISTS hosting_deployments (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_hosting_tenant_service_version ON hosting_deployments(tenant_id, service_name, version DESC);
+CREATE TABLE IF NOT EXISTS hosting_deployment_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  deployment_id INTEGER NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  service_name TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  level TEXT NOT NULL DEFAULT 'info',
+  event_type TEXT NOT NULL DEFAULT 'event',
+  message TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_hosting_events_tenant_service_created
+  ON hosting_deployment_events(tenant_id, service_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hosting_events_deployment_created
+  ON hosting_deployment_events(deployment_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS hosting_deployment_env (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  deployment_id INTEGER NOT NULL,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  key TEXT NOT NULL,
+  value TEXT NOT NULL DEFAULT '',
+  is_secret INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_hosting_env_deployment ON hosting_deployment_env(deployment_id);
+CREATE INDEX IF NOT EXISTS idx_hosting_env_tenant_service_key ON hosting_deployment_env(tenant_id, key);
 CREATE TABLE IF NOT EXISTS personas (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
@@ -259,7 +288,7 @@ function ensureTenantColumn(table) {
   }
 }
 
-["settings", "sessions", "messages", "memories", "tasks", "services", "vm_instances", "vm_jobs", "vm_terminal_sessions", "personas", "chats", "chat_runs", "chat_shares", "skills", "oauth_connections", "oauth_states", "browser_sessions", "hosting_deployments"].forEach(ensureTenantColumn);
+["settings", "sessions", "messages", "memories", "tasks", "services", "vm_instances", "vm_jobs", "vm_terminal_sessions", "personas", "chats", "chat_runs", "chat_shares", "skills", "oauth_connections", "oauth_states", "browser_sessions", "hosting_deployments", "hosting_deployment_events", "hosting_deployment_env"].forEach(ensureTenantColumn);
 
 // Legacy databases used `key` as the sole primary key on settings. That
 // prevents two tenants from storing the same setting name. Rebuild the small
@@ -311,6 +340,8 @@ try {
     UPDATE oauth_states SET tenant_id='default' WHERE tenant_id IS NULL;
     UPDATE browser_sessions SET tenant_id='default' WHERE tenant_id IS NULL;
     UPDATE hosting_deployments SET tenant_id='default' WHERE tenant_id IS NULL;
+    UPDATE hosting_deployment_events SET tenant_id='default' WHERE tenant_id IS NULL;
+    UPDATE hosting_deployment_env SET tenant_id='default' WHERE tenant_id IS NULL;
   `);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
@@ -324,6 +355,12 @@ try {
     CREATE INDEX IF NOT EXISTS idx_oauth_connections_tenant_provider ON oauth_connections(tenant_id, provider);
     CREATE INDEX IF NOT EXISTS idx_browser_sessions_tenant_updated ON browser_sessions(tenant_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_hosting_tenant_service_version ON hosting_deployments(tenant_id, service_name, version DESC);
+    CREATE INDEX IF NOT EXISTS idx_hosting_events_tenant_service_created
+      ON hosting_deployment_events(tenant_id, service_name, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_hosting_events_deployment_created
+      ON hosting_deployment_events(deployment_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_hosting_env_deployment ON hosting_deployment_env(deployment_id);
+    CREATE INDEX IF NOT EXISTS idx_hosting_env_tenant_service_key ON hosting_deployment_env(tenant_id, key);
   `);
 } catch {
   // ignore
