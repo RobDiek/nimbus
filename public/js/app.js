@@ -23,13 +23,53 @@ document.addEventListener("click", (e) => {
   if (g) switchView(g.dataset.goto);
 });
 
+function initModelUIFromSettings(s) {
+  // requirement: fully writeable text input, and "every model i type" must work
+  // UI: dropdown (#modelSel) + text input (#modelCustomInput)
+  const modelSel = $("#modelSel");
+  const modelCustomInput = $("#modelCustomInput");
+  const providerSel = $("#providerSel");
+  if (providerSel && s?.provider) providerSel.value = s.provider;
+  if ($("#customBaseUrl")) $("#customBaseUrl").value = s?.customBaseUrl || "";
+  if (modelCustomInput) {
+    modelCustomInput.style.display = "";
+    modelCustomInput.value = (s?.model ?? modelCustomInput.value ?? "").toString();
+  }
+  if (modelSel) {
+    const known = [
+      "blackboxai/openai/gpt-oss-120b",
+      "claude-sonnet-5",
+      "gpt-4o-mini",
+      "gemini-1.5-flash",
+      "openai/gpt-4o-mini",
+    ];
+    const current = (s?.model ?? "").toString();
+    const options = current && !known.includes(current) ? [current, ...known] : known;
+    modelSel.innerHTML = options.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    modelSel.style.display = "";
+    modelSel.value = current || options[0] || "";
+  }
+}
+
+function ensureCustomInputAlwaysSane() {
+  const modelCustomInput = $("#modelCustomInput");
+  if (!modelCustomInput) return;
+  if (!modelCustomInput.value && $("#modelSel")?.value) modelCustomInput.value = $("#modelSel").value;
+}
+$$(".nav-item").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.view)));
+document.addEventListener("click", (e) => {
+  const g = e.target.closest("[data-goto]");
+  if (g) switchView(g.dataset.goto);
+});
+
 function onViewOpen(v) {
   if (v === "space") loadSpace();
   if (v === "files") loadFiles(".");
-  if (v === "hosting") loadServices();
+  if (v === "hosting") loadHosting();
   if (v === "automations") loadTasks();
-  if (v === "skills") loadPersonas();
+  if (v === "skills") { loadSkills(); loadPersonas(); }
   if (v === "integrations") loadIntegrations();
+  if (v === "browser") loadBrowserSessions();
   if (v === "terminal") initTerminal();
   if (v === "start") $("#input").focus();
 }
@@ -59,10 +99,9 @@ async function fillPersonaSelect() {
 
 /* ============ Recent Chats ============ */
 async function loadRecent(filter = "") {
-  const { sessions } = await api.get("/api/sessions");
+  const { chats } = await api.get("/api/chats?q=" + encodeURIComponent(filter || "") + "&archived=false");
   const list = $("#recentList");
-  const shown = sessions
-    .filter((s) => !filter || s.title.toLowerCase().includes(filter.toLowerCase()))
+  const shown = (chats || [])
     .slice(0, state.showAllChats ? 200 : 8);
   list.innerHTML = "";
   shown.forEach((s) => {
@@ -80,7 +119,7 @@ $("#chatSearch").addEventListener("input", (e) => loadRecent(e.target.value));
 $("#viewAll").onclick = () => { state.showAllChats = !state.showAllChats; loadRecent($("#chatSearch").value); };
 
 async function deleteSession(id) {
-  await api.post("/api/sessions/delete", { id });
+  await fetch("/api/chats/" + encodeURIComponent(id), { method: "DELETE" });
   if (state.sessionId === id) newChat();
   loadRecent();
 }
@@ -348,13 +387,46 @@ async function loadSpace() {
     <div class="stat"><div class="k">${icon("ram")}Arbeitsspeicher</div><div class="v">${sys.mem_gb} <small>GB</small></div></div>
     <div class="stat"><div class="k">${icon("clock")}Uptime</div><div class="v">${up}</div></div>
     <div class="stat"><div class="k">${icon("term")}System</div><div class="v">${esc(sys.platform)} <small>${esc(sys.arch)}</small></div></div>`;
-  $("#modelSel").value = s.model || "claude-sonnet-5";
-  $("#apiKey").placeholder = s.hasKey ? "•••••••• (gesetzt) — neu eingeben zum Ändern" : "sk-ant-…";
+
+  initModelUIFromSettings(s);
+  ensureCustomInputAlwaysSane();
+
+  // NOTE: this file is now missing the old provider/model dropdown logic; keep it minimal.
+  // We only ensure the model input is editable and persists.
   loadMemory();
 }
 $("#saveSettings").onclick = async () => {
-  await api.post("/api/settings", { apiKey: $("#apiKey").value, model: $("#modelSel").value });
-  $("#apiKey").value = "";
+  // requirement: any model string user types must be sent as "model"
+  const modelSel = $("#modelSel");
+  const modelCustomInput = $("#modelCustomInput");
+
+  let model = "";
+  if (modelCustomInput && modelCustomInput.value?.trim()) model = modelCustomInput.value.trim();
+  else if (modelSel && modelSel.value?.trim()) model = modelSel.value.trim();
+
+  // preserve existing provider/key fields if they exist
+  const provider = $("#providerSel")?.value || "anthropic";
+  const anthropicApiKey = $("#apiKeyAnthropic")?.value || "";
+  const openaiApiKey = $("#apiKeyOpenAI")?.value || "";
+  const googleApiKey = $("#apiKeyGoogle")?.value || "";
+  const customApiKey = $("#apiKeyCustom")?.value || "";
+  const customBaseUrl = $("#customBaseUrl")?.value || "";
+
+  await api.post("/api/settings", {
+    provider,
+    model,
+    anthropicApiKey,
+    openaiApiKey,
+    googleApiKey,
+    customApiKey,
+    customBaseUrl,
+  });
+
+  if ($("#apiKeyAnthropic")) $("#apiKeyAnthropic").value = "";
+  if ($("#apiKeyOpenAI")) $("#apiKeyOpenAI").value = "";
+  if ($("#apiKeyGoogle")) $("#apiKeyGoogle").value = "";
+  if ($("#apiKeyCustom")) $("#apiKeyCustom").value = "";
+
   $("#settingsMsg").textContent = "✓ Gespeichert";
   initStatus();
   setTimeout(() => $("#settingsMsg").textContent = "", 2500);
@@ -425,28 +497,42 @@ $("#saveFile").onclick = async () => {
   $("#editorName").textContent = $("#editorName").textContent.replace(" ✓", "") + " ✓";
 };
 
-/* ============ Hosting (Services) ============ */
-async function loadServices() {
-  const { services } = await api.get("/api/services");
+/* ============ Hosting (Supervisor + Services) ============ */
+async function loadHosting() {
+  const [{ services }, { deployments }] = await Promise.all([
+    api.get("/api/services"),
+    api.get("/api/hosting/deployments"),
+  ]);
+  const latest = new Map();
+  (deployments || []).forEach((d) => {
+    if (!latest.has(d.service_name)) latest.set(d.service_name, d);
+  });
   const list = $("#svcList");
   list.innerHTML = services.length ? "" : `<p class="mut">Noch keine Services. Starte einen oben oder per Chat.</p>`;
   services.forEach((s) => {
+    const dep = latest.get(s.name);
     const c = document.createElement("div");
     c.className = "item-card";
     c.innerHTML = `<div class="grow"><h3>${esc(s.name)} <span class="badge ${s.status}">${s.status === "running" ? "läuft" : "gestoppt"}</span></h3>
-      <p class="mono">${esc(s.command)}</p>${s.pid ? `<div class="meta">PID ${s.pid}</div>` : ""}</div>
+      <p class="mono">${esc(s.command)}</p>
+      ${dep ? `<div class="meta">v${dep.version} · health ${esc(dep.health_status)}${dep.public_url ? " · " + esc(dep.public_url) : ""}${dep.https_url ? " · " + esc(dep.https_url) : ""}</div>` : ""}
+      ${s.pid ? `<div class="meta">PID ${s.pid}</div>` : ""}</div>
       <div style="display:flex;gap:6px">
         <button class="icon-btn" data-a="logs">${icon("doc")}Logs</button>
+        <button class="icon-btn" data-a="health">${icon("pulse")}Health</button>
+        <button class="icon-btn" data-a="rollback">${icon("refresh")}Rollback</button>
         <button class="icon-btn" data-a="toggle">${icon(s.status === "running" ? "stop" : "play")}${s.status === "running" ? "Stop" : "Start"}</button>
         <button class="icon-btn danger" data-a="rm">${icon("trash")}</button>
       </div>`;
     c.querySelector('[data-a="logs"]').onclick = () => showLogs(s.name);
+    c.querySelector('[data-a="health"]').onclick = async () => { await api.post("/api/hosting/health", { name: s.name }); loadHosting(); };
+    c.querySelector('[data-a="rollback"]').onclick = async () => { await api.post("/api/hosting/rollback", { name: s.name }); loadHosting(); };
     c.querySelector('[data-a="toggle"]').onclick = async () => {
       if (s.status === "running") await api.post("/api/services/stop", { name: s.name });
       else await api.post("/api/services/start", { name: s.name, command: s.command, cwd: s.cwd });
-      loadServices();
+      loadHosting();
     };
-    c.querySelector('[data-a="rm"]').onclick = async () => { await api.post("/api/services/remove", { name: s.name }); loadServices(); };
+    c.querySelector('[data-a="rm"]').onclick = async () => { await api.post("/api/services/remove", { name: s.name }); loadHosting(); };
     list.appendChild(c);
   });
 }
@@ -458,9 +544,10 @@ async function showLogs(name) {
 $("#svcStart").onclick = async () => {
   const name = $("#svcName").value.trim(), command = $("#svcCmd").value.trim();
   if (!name || !command) return;
-  await api.post("/api/services/start", { name, command });
-  $("#svcName").value = ""; $("#svcCmd").value = "";
-  loadServices();
+  const port = Number($("#svcPort").value.trim()) || undefined;
+  await api.post("/api/hosting/deploy", { name, command, port });
+  $("#svcName").value = ""; $("#svcCmd").value = ""; $("#svcPort").value = "";
+  loadHosting();
 };
 
 /* ============ Automatisierungen ============ */
@@ -474,10 +561,18 @@ async function loadTasks() {
     c.innerHTML = `<div class="grow"><h3>${esc(t.name)} <span class="badge ${t.enabled ? "on" : "off"}">${t.enabled ? "aktiv" : "pausiert"}</span></h3>
       <p>${esc(t.prompt)}</p><div class="meta">cron ${esc(t.cron)}${t.last_run ? " · zuletzt " + esc(t.last_run) : ""}</div>
       ${t.last_result ? `<p class="mut" style="margin-top:6px">↳ ${esc(t.last_result.slice(0, 220))}</p>` : ""}</div>
-      <div style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="icon-btn" data-a="run">${icon("play")}Jetzt ausführen</button>
         <button class="icon-btn" data-a="toggle">${icon(t.enabled ? "stop" : "play")}${t.enabled ? "Pause" : "Aktivieren"}</button>
         <button class="icon-btn danger" data-a="del">${icon("trash")}</button>
       </div>`;
+    c.querySelector('[data-a="run"]').onclick = async () => {
+      const btn = c.querySelector('[data-a="run"]');
+      btn.disabled = true;
+      await api.post("/api/tasks/run", { id: t.id });
+      btn.disabled = false;
+      loadTasks();
+    };
     c.querySelector('[data-a="toggle"]').onclick = async () => { await api.post("/api/tasks/toggle", { id: t.id }); loadTasks(); };
     c.querySelector('[data-a="del"]').onclick = async () => { await api.post("/api/tasks/delete", { id: t.id }); loadTasks(); };
     list.appendChild(c);
@@ -492,43 +587,77 @@ $("#taskAdd").onclick = async () => {
 };
 
 /* ============ Integrationen ============ */
-const INTEGRATIONS = [
-  { id: "gmail", name: "Gmail", color: "#ea4335", desc: "E-Mails lesen, durchsuchen und Entwürfe erstellen." },
-  { id: "outlook", name: "Outlook", color: "#0078d4", desc: "Microsoft-365-Postfach & Kalender." },
-  { id: "telegram", name: "Telegram", color: "#2aabee", desc: "Nachrichten senden und empfangen." },
-  { id: "gcal", name: "Google Calendar", color: "#4285f4", desc: "Termine lesen, erstellen und verschieben." },
-  { id: "slack", name: "Slack", color: "#611f69", desc: "Channels lesen und Nachrichten posten." },
-  { id: "notion", name: "Notion", color: "#1c1f23", desc: "Seiten und Datenbanken bearbeiten." },
-  { id: "github", name: "GitHub", color: "#24292f", desc: "Repos, Issues und Pull Requests." },
-  { id: "gdrive", name: "Google Drive", color: "#0f9d58", desc: "Dateien suchen und lesen." },
-  { id: "figma", name: "Figma", color: "#a259ff", desc: "Design-Kontext für den Agenten." },
-];
+const INT_META = {
+  gmail: ["#ea4335", "E-Mails lesen, durchsuchen und Entwürfe erstellen."],
+  outlook: ["#0078d4", "Microsoft-365-Postfach & Kalender."],
+  telegram: ["#2aabee", "Bot-Nachrichten senden und empfangen."],
+  gcal: ["#4285f4", "Termine lesen, erstellen und verschieben."],
+  slack: ["#611f69", "Channels lesen und Nachrichten posten."],
+  github: ["#24292f", "Repos, Issues und Pull Requests."],
+  gdrive: ["#0f9d58", "Dateien suchen und lesen."],
+};
 async function loadIntegrations() {
-  const s = await api.get("/api/settings");
-  const conn = s.integrations || {};
+  const { providers } = await api.get("/api/oauth/providers");
   const grid = $("#intGrid");
   grid.innerHTML = "";
-  INTEGRATIONS.forEach((it) => {
-    const isOn = !!conn[it.id];
+  (providers || []).forEach((it) => {
+    const [color, desc] = INT_META[it.id] || ["#4b5563", "OAuth-Integration"];
+    const isOn = it.status === "connected";
     const c = document.createElement("div");
     c.className = "int-card";
-    c.innerHTML = `<div class="int-head"><span class="int-logo" style="background:${it.color}">${esc(it.name[0])}</span>
+    c.innerHTML = `<div class="int-head"><span class="int-logo" style="background:${color}">${esc(it.name[0])}</span>
       <h3>${esc(it.name)}</h3></div>
-      <p>${esc(it.desc)}</p>
+      <p>${esc(desc)}</p>
       <div class="int-foot">
-        <span class="badge ${isOn ? "on" : "off"}">${isOn ? "verbunden" : "nicht verbunden"}</span>
+        <span class="badge ${isOn ? "on" : "off"}">${isOn ? "verbunden" : (it.configured ? "bereit" : "Client fehlt")}</span>
         <button class="btn ${isOn ? "" : "dark"}">${isOn ? "Trennen" : "Verbinden"}</button>
       </div>`;
     c.querySelector(".btn").onclick = async () => {
-      conn[it.id] = !isOn;
-      await api.post("/api/settings", { integrations: conn });
+      if (isOn) await api.post("/api/oauth/disconnect", { provider: it.id });
+      else {
+        const r = await api.post("/api/oauth/start", { provider: it.id, redirect_uri: location.origin + "/api/oauth/callback" });
+        if (r.auth_url) window.open(r.auth_url, "_blank", "noopener");
+        else alert(r.error || r.setup || "OAuth nicht konfiguriert.");
+      }
       loadIntegrations();
     };
     grid.appendChild(c);
   });
 }
 
-/* ============ Fähigkeiten (Personas) ============ */
+/* ============ Fähigkeiten (SKILL.md + Personas) ============ */
+async function loadSkills() {
+  const { skills } = await api.get("/api/skills");
+  const list = $("#skillList");
+  list.innerHTML = skills?.length ? "" : `<p class="mut">Noch keine SKILL.md importiert. Lege einen Skill an oder scanne workspace/skills.</p>`;
+  (skills || []).forEach((s) => {
+    const c = document.createElement("div");
+    c.className = "item-card";
+    c.innerHTML = `<span class="avatar-initial">${esc(s.name[0] || "S")}</span>
+      <div class="grow"><h3>${esc(s.name)} <span class="badge ${s.enabled ? "on" : "off"}">${s.enabled ? "aktiv" : "aus"}</span></h3>
+      <p>${esc(s.description || "Keine Beschreibung")}</p>
+      <div class="meta">${esc((s.scopes || []).join(", "))}${s.source_path ? " · " + esc(s.source_path) : ""}</div></div>
+      <button class="icon-btn" data-a="toggle">${s.enabled ? "Deaktivieren" : "Aktivieren"}</button>`;
+    c.querySelector('[data-a="toggle"]').onclick = async () => {
+      await api.post("/api/skills/toggle", { id: s.id, enabled: !s.enabled });
+      loadSkills();
+    };
+    list.appendChild(c);
+  });
+}
+$("#skillScan").onclick = async () => { await api.post("/api/skills/scan"); loadSkills(); };
+$("#skillCreate").onclick = async () => {
+  const name = $("#skillName").value.trim();
+  if (!name) return;
+  await api.post("/api/skills", {
+    name,
+    scopes: $("#skillScopes").value,
+    rules: $("#skillRules").value,
+  });
+  $("#skillName").value = ""; $("#skillScopes").value = ""; $("#skillRules").value = "";
+  loadSkills();
+};
+
 async function loadPersonas() {
   const { personas } = await api.get("/api/personas");
   const list = $("#personaList");
@@ -563,29 +692,68 @@ $("#pSave").onclick = async () => {
 $("#pClear").onclick = () => { ["pId", "pName", "pModel", "pPrompt"].forEach((i) => $("#" + i).value = ""); };
 
 /* ============ Browser ============ */
-function loadUrl(asText = false) {
+let browserState = { sessionId: null };
+async function loadBrowserSessions() {
+  const { sessions } = await api.get("/api/browser/sessions");
+  const sel = $("#browserSessionSel");
+  if (!sel) return;
+  sel.innerHTML = (sessions || []).map((s) => `<option value="${esc(s.id)}">${esc(s.id)} · ${esc(s.title || s.current_url || "leer")}</option>`).join("");
+  if (!browserState.sessionId && sessions?.[0]) browserState.sessionId = sessions[0].id;
+  if (browserState.sessionId) sel.value = browserState.sessionId;
+  sel.onchange = () => browserState.sessionId = sel.value;
+}
+function showBrowserText(text) {
+  $("#browserHint").hidden = true;
+  $("#browserFrame").hidden = true;
+  const pre = $("#browserText");
+  pre.hidden = false;
+  pre.textContent = text || "";
+}
+async function loadUrl(asText = false) {
   let url = $("#urlInput").value.trim();
   if (!url) return;
   if (!/^https?:\/\//.test(url)) url = "https://" + url;
   $("#urlInput").value = url;
   $("#browserHint").hidden = true;
+  const r = await api.post("/api/browser/open", { session_id: browserState.sessionId, url });
+  if (r.session?.id) browserState.sessionId = r.session.id;
+  await loadBrowserSessions();
   if (asText) {
-    $("#browserFrame").hidden = true;
-    const pre = $("#browserText");
-    pre.hidden = false;
-    pre.textContent = "Lade …";
-    api.get("/api/webfetch?url=" + encodeURIComponent(url)).then((r) => {
-      pre.textContent = r.error ? "Fehler: " + r.error : r.content;
-    });
+    showBrowserText(r.error ? "Fehler: " + r.error : r.session?.text);
   } else {
     $("#browserText").hidden = true;
     const f = $("#browserFrame");
     f.hidden = false;
-    f.src = url;
+    f.src = r.session?.current_url || url;
   }
 }
 $("#urlGo").onclick = () => loadUrl(false);
 $("#urlText").onclick = () => loadUrl(true);
+$("#urlShot").onclick = async () => {
+  if (!browserState.sessionId) return;
+  const r = await api.post("/api/browser/screenshot", { session_id: browserState.sessionId });
+  showBrowserText(r.screenshot_text || r.error || "");
+};
+$("#browserClick").onclick = async () => {
+  if (!browserState.sessionId) return;
+  const raw = $("#browserClickText").value.trim();
+  const payload = /^\d+$/.test(raw) ? { session_id: browserState.sessionId, index: Number(raw) } : { session_id: browserState.sessionId, text: raw };
+  const r = await api.post("/api/browser/click", payload);
+  if (r.session?.id) browserState.sessionId = r.session.id;
+  $("#urlInput").value = r.session?.current_url || $("#urlInput").value;
+  showBrowserText(r.error ? "Fehler: " + r.error : r.session?.text);
+  loadBrowserSessions();
+};
+$("#browserSubmit").onclick = async () => {
+  if (!browserState.sessionId) return;
+  let fields = {};
+  try { fields = JSON.parse($("#browserFormFields").value || "{}"); } catch { alert("Form JSON ist ungueltig."); return; }
+  const r = await api.post("/api/browser/submit", { session_id: browserState.sessionId, fields });
+  if (r.session?.id) browserState.sessionId = r.session.id;
+  $("#urlInput").value = r.session?.current_url || $("#urlInput").value;
+  showBrowserText(r.error ? "Fehler: " + r.error : r.session?.text);
+  loadBrowserSessions();
+};
 $("#urlInput").addEventListener("keydown", (e) => { if (e.key === "Enter") loadUrl(false); });
 
 /* ============ Start ============ */

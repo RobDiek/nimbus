@@ -1,88 +1,495 @@
-# ☁ Nimbus — Dein KI-Computer in der Cloud
+# ☁️ Nimbus
 
-Ein voll funktionsfähiger **zo.computer-Klon**: kein reiner Chatbot, sondern ein
-persönlicher Server mit eingebautem KI-Agenten, der echtes Terminal, Dateisystem,
-Services, Scheduler, Web-Zugriff, Memory und Personas steuert.
+Nimbus is a personal AI computer in the cloud: not just a chatbot, but a Bun-powered server with an integrated agent that can use terminal commands, files, web tools, persistent memory, scheduled tasks, services, and a browser-style UI.
 
-![Bun](https://img.shields.io/badge/runtime-Bun-black) ![No deps](https://img.shields.io/badge/dependencies-0-brightgreen) ![License](https://img.shields.io/badge/license-MIT-blue)
+This project includes:
 
-## Schnellstart
+- A landing page (`/`)
+- A full app console (`/app`)
+- REST APIs
+- Streaming chat via SSE
+- Persistent terminal via WebSocket
+- SQLite-backed persistence (tenant-scoped settings, chats/runs/events, memory, tasks/runs, personas, services)
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Run the Project](#run-the-project)
+- [Initial Setup (BYOK)](#initial-setup-byok)
+- [Usage Guide](#usage-guide)
+- [API Overview](#api-overview)
+- [Data & Persistence](#data--persistence)
+- [Multi-Tenant Notes](#multi-tenant-notes)
+- [Troubleshooting](#troubleshooting)
+- [Security Notes](#security-notes)
+- [License](#license)
+
+---
+
+## Features
+
+### Agent Capabilities (Tooling)
+
+The AI agent can use these tools:
+
+- `run_command` – run bash commands
+- `read_file`, `write_file`, `list_files`, `delete_path` – filesystem operations
+- `web_search`, `web_fetch` – web search and page text extraction
+- `remember`, `search_memory` – persistent memory storage/search
+- `schedule_task`, `list_tasks`, `delete_task` – cron-like automations
+- `start_service`, `stop_service`, `list_services`, `service_logs` – background service management
+- `write_file_base64` – binary-sicherer Upload-/Datei-Write-Pfad
+- `list_skills`, `scan_skills` – SKILL.md registry with scopes/rules
+- `browser_open`, `browser_click`, `browser_submit`, `browser_screenshot` – persistent browser sessions
+- `list_oauth_integrations`, `start_oauth_integration` – OAuth provider discovery/start
+- `deploy_hosting`, `hosting_healthcheck`, `hosting_rollback`, `list_hosting_deployments` – versioned hosting supervisor
+
+### App Sections
+
+In `/app` you get:
+
+- **Start**: chat interface with SSE streaming and tool-call visibility
+- **Mein Nimbus Space**: provider/key settings, model selection, memory management
+- **Dateien**: file browser + editor + upload
+- **Automatisierungen**: scheduled task management
+- **Integrationen**: OAuth provider state, auth URL generation, callback/token persistence, manual token path
+- **Fähigkeiten**: SKILL.md import/create/scan with scopes/rules plus personas
+- **Browser**: persistent sessions with navigation, link clicks, form submit and text screenshot
+- **Hosting**: service deployments with public/HTTPS URL metadata, healthchecks and rollback history
+- **Terminal**: persistent bash session over WebSocket
+
+---
+
+## Tech Stack
+
+- **Runtime**: [Bun](https://bun.sh)
+- **Database**: `bun:sqlite` (SQLite file in `data/nimbus.db`)
+- **Frontend**: Vanilla HTML/CSS/JS
+- **Server**: Bun `Bun.serve` + REST + SSE + WebSocket
+- **Dependencies**: no external npm dependencies currently required
+
+## Architecture Notes
+
+- `src/server.js` handles HTTP routing, SSE chat, static file serving, and WebSocket terminal upgrades.
+- `src/agent.js` provides multi-provider orchestration and tool-call execution loop.
+- `src/tools.js` contains tool implementations and centralized dispatching.
+- `src/tenancy/router.js` resolves tenant context from host and prepares tenant workspace.
+- `src/logger.js` provides lightweight structured logging across server/tool execution.
+- `src/config.js` centralizes runtime defaults (port, timeouts, max turns).
+- `src/scheduler.js` provides tenant-aware scheduling, manual task runs and persisted run history.
+- `src/db.js` migrates legacy settings to the composite `(tenant_id, key)` primary key and maintains chat search/run indexes.
+
+## Runtime Configuration
+
+Primary runtime options:
+
+- `PORT` (default: `4000`)
+- `HTTP_TIMEOUT_MS` (default: `30000`)
+- `TOOL_TIMEOUT_MS` (default: `120000`)
+- `ANTHROPIC_API_KEY`
+- `OPENAI_API_KEY`
+- `GEMINI_API_KEY`
+- `CUSTOM_LLM_API_KEY`
+- `CUSTOM_LLM_BASE_URL`
+- `OPENROUTER_API_KEY`
+
+Provider/model preferences are persisted in settings (`/api/settings`) and can fallback to env vars.
+
+Proxmox options are fully environment-variable driven:
+
+- `PROXMOX_ENABLED=true|false`
+- `PROXMOX_BASE_URL` (e.g. `https://pve.example.com:8006`)
+- `PROXMOX_TOKEN_ID` (e.g. `nimbus@pve!api-token`)
+- `PROXMOX_TOKEN_SECRET`
+- `PROXMOX_NODE`
+- `PROXMOX_STORAGE` (default: `local-lvm`)
+- `PROXMOX_BRIDGE` (default: `vmbr0`)
+- `PROXMOX_TEMPLATE_VMID`
+- `PROXMOX_VMID_START` (default: `5000`)
+- `PROXMOX_VM_CORES` (default: `2`)
+- `PROXMOX_VM_MEMORY_MB` (default: `4096`)
+- `PROXMOX_VM_DISK_GB` (default: `32`)
+- `PROXMOX_CI_USER` (default: `nimbus`)
+- `PROXMOX_CI_SSH_PUBLIC_KEY`
+- `PROXMOX_CI_PASSWORD`
+- `PROXMOX_IPCONFIG` (default: `ip=dhcp`)
+- `PROXMOX_NAMESERVER`
+- `PROXMOX_SEARCHDOMAIN`
+- `PROXMOX_SSH_CONNECT_TIMEOUT_SEC` (default: `5`)
+
+---
+
+## Project Structure
+
+```text
+nimbus/
+  public/
+    index.html          # Landing page
+    app.html            # Main app shell
+    css/app.css         # App styles
+    js/app.js           # Frontend logic
+  src/
+    server.js           # HTTP server, routes, SSE chat, WebSocket terminal
+    agent.js            # Agent loop + provider adapters
+    tools.js            # Tool implementations + dispatcher
+    db.js               # SQLite setup/schema/migrations/default data + vm_instances
+    proxmox.js          # Proxmox API integration and tenant VM orchestration helpers
+    scheduler.js        # Cron-style task scheduler
+    services.js         # Background service lifecycle/log management
+    tenancy/router.js   # Tenant context resolution from request
+  data/
+    nimbus.db           # SQLite database (auto-created)
+  workspace/            # Agent workspace (auto-created)
+  package.json
+  README.md
+```
+
+---
+
+## Prerequisites
+
+- **Bun** installed (recommended latest stable)
+- macOS/Linux environment recommended for shell tooling
+- Internet access for LLM API calls and web tools
+- At least one API key for your chosen LLM provider
+
+> Nimbus runs with no key, but chat agent responses requiring a provider won’t work until BYOK is configured.
+
+---
+
+## Installation
+
+From project root:
 
 ```bash
-bun run src/server.js          # oder: bun run dev  (Auto-Reload)
+bun install
 ```
 
-Dann im Browser:
-- **Landing Page:** http://localhost:4000/
-- **App / Konsole:** http://localhost:4000/app
+Even with no declared dependencies, this keeps standard Bun workflow consistent.
 
-Beim ersten Start unter **Mein Nimbus Space → BYOK** deinen Anthropic-API-Key
-eintragen (bleibt lokal in `data/nimbus.db`). Modell wählbar (Sonnet 5, Fable 5,
-Opus 4.8, Haiku 4.5). Alle Bereiche außer dem Chat funktionieren auch ohne Key.
+---
 
-## Was der Agent kann (echte Tools)
+## Run the Project
 
-| Tool | Funktion |
-|---|---|
-| `run_command` | Bash im Workspace ausführen (Bun, Python, Node, …) |
-| `read_file` / `write_file` / `list_files` / `delete_path` | Vollständiger Dateizugriff |
-| `web_search` / `web_fetch` | Websuche (DuckDuckGo) & Seiten als Text |
-| `remember` / `search_memory` | Persistentes Memory über Sessions hinweg |
-| `schedule_task` / `list_tasks` / `delete_task` | Autonome Cron-Agenten |
-| `start_service` / `stop_service` / `list_services` / `service_logs` | Langlebige Hintergrundprozesse |
-
-## Oberfläche (App)
-
-Im hellen zo-Style mit SVG-Icons und Animationen:
-
-- **Start** — Chat-Konsole mit Live-Streaming (SSE), Persona-Wahl, Vorschlags-Chips und aufklappbaren Tool-Calls
-- **Mein Nimbus Space** — Systemstatus (echte CPU-/RAM-Werte), BYOK & Memory-Verwaltung
-- **Dateien** — Explorer mit Editor (lesen/schreiben/speichern)
-- **Automatisierungen** — Cron-Tasks, die ein Agent autonom abarbeitet
-- **Integrationen** — Gmail, Outlook, Telegram, Slack, Notion, GitHub, … (an-/abschaltbar)
-- **Fähigkeiten** — Personas: KI-Persönlichkeiten mit eigenem Prompt & Modell
-- **Browser** — URL laden (iframe) oder als Text extrahieren
-- **Hosting** — Services starten/stoppen, Live-Logs
-- **Terminal** — echte **persistente Bash-Session** über WebSocket, mit Boot-Sequenz & History
-
-## Terminal = echtes virtuelles System
-
-Das Terminal ist keine One-Shot-Ausführung, sondern eine durchgehende Bash-Session
-pro WebSocket-Verbindung (`/ws/term`). Zustand bleibt erhalten:
+### Development (watch mode)
 
 ```bash
-nimbus:~$ cd /tmp && export FOO=nimbus
-nimbus:~$ pwd && echo $FOO
-/tmp
-nimbus
+bun run dev
 ```
 
-## Architektur
+### Start (normal mode)
 
-```
-src/
-  server.js     Bun.serve: REST-API, SSE-Chat, WebSocket-Terminal, statische Auslieferung
-  agent.js      Agent-Loop gegen Anthropic Messages API (Tool-Use-Schleife, max 25 Turns)
-  tools.js      Tool-Definitionen + executeTool-Dispatcher
-  services.js   User-Services: Prozess-Management mit Ring-Buffer-Logs
-  scheduler.js  Minütlicher Cron-Matcher, führt Tasks über den Agenten aus
-  db.js         SQLite-Schema, Settings, Default-Personas
-public/
-  index.html    Landing Page (dunkel, animiert)
-  app.html      Single-Page-Konsole (hell, zo-Style) + SVG-Icon-Sprite
-  css/app.css   Design-System
-  js/app.js     Frontend-Logik (Views, Streaming, Terminal, Panels)
+```bash
+bun run src/server.js
 ```
 
-**Stack:** Bun + bun:sqlite + Vanilla JS. Keine externen Dependencies, kein Build-Step.
-Details für Mitwirkende in [CLAUDE.md](CLAUDE.md).
+or
 
-## Sicherheit
+```bash
+bun run start
+```
 
-- `delete_path` ist auf den Workspace beschränkt; `run_command` hat vollen Zugriff
-  (persönlicher Server, wie beim Original — nur mit eigenem Key betreiben).
-- Der API-Key liegt lokal in der SQLite-DB und wird nur an die Anthropic-API gesendet.
+Default URL:
 
-## Lizenz
+- Landing: `http://localhost:4000/`
+- App: `http://localhost:4000/app`
 
-MIT — siehe [LICENSE](LICENSE). Inspiriert von [zo.computer](https://zo.computer).
+Optional environment variable:
+
+```bash
+PORT=4010 bun run src/server.js
+```
+
+---
+
+## Initial Setup (BYOK)
+
+1. Open `http://localhost:4000/app`
+2. Go to **Mein Nimbus Space**
+3. Select provider and enter key/base URL as needed
+4. Save settings
+
+### Supported Providers (current implementation)
+
+- Anthropic
+- OpenAI
+- Google Gemini (OpenAI-compatible endpoint mode)
+- Custom OpenAI-compatible provider
+- OpenRouter (supported in backend logic)
+
+Settings are stored in SQLite and can also be sourced from environment variables (fallbacks exist in backend logic).
+
+---
+
+## Usage Guide
+
+### 1) Chat & Agent Actions
+
+- Open **Start**
+- Ask Nimbus to perform tasks in natural language
+- Watch streamed text/tool events
+- Tool calls appear in the UI with payload/result snippets
+
+### 2) Files
+
+- Open **Dateien**
+- Browse workspace folders
+- Open, edit, and save files
+- Upload files using multipart upload controls
+
+### 3) Terminal
+
+- Open **Terminal**
+- Uses VM-backed execution when tenant VM is available and ready
+- Falls back to local persistent bash process if VM integration is not configured/ready
+- Command history is maintained client-side in the terminal panel
+
+### 4) Hosting / Services
+
+- Open **Hosting**
+- Start long-running processes (e.g., local API or static server)
+- View logs and stop/remove services from UI
+
+### 5) Automations
+
+- Open **Automatisierungen**
+- Create tasks with cron syntax (`min hour day month weekday`)
+- Scheduler executes prompts in background via agent loop
+
+### 6) Personas
+
+- Open **Fähigkeiten**
+- Create/edit personas with:
+  - Name
+  - Optional model override
+  - System prompt
+
+---
+
+## API Overview
+
+High-level endpoints in `src/server.js` include:
+
+- Status/settings:
+  - `GET /api/status`
+  - `GET /api/sysinfo`
+  - `GET /api/settings`
+  - `POST /api/settings`
+- Chat:
+  - `POST /api/chat` (SSE stream response)
+- Sessions/messages:
+  - `GET /api/sessions`
+  - `POST /api/sessions/delete`
+  - `GET /api/messages?session_id=...`
+- Personas:
+  - `GET /api/personas`
+  - `POST /api/personas`
+  - `POST /api/personas/delete`
+- Memories:
+  - `GET /api/memories`
+  - `POST /api/memories`
+  - `POST /api/memories/delete`
+- Tasks:
+  - `GET /api/tasks`
+  - `POST /api/tasks`
+  - `POST /api/tasks/toggle`
+  - `POST /api/tasks/delete`
+  - `POST /api/tasks/run`
+  - `GET /api/task-runs?task_id=...`
+- Chats:
+  - `GET /api/chats?q=...&archived=false`
+  - `GET /api/chats/:id`
+  - `PATCH /api/chats/:id`
+  - `DELETE /api/chats/:id`
+  - `POST /api/chats/:id/share`
+  - `POST /api/chats/:id/share/revoke`
+  - `GET /api/share/:token` (read-only)
+- Services:
+  - `GET /api/services`
+  - `POST /api/services/start`
+  - `POST /api/services/stop`
+  - `POST /api/services/remove`
+  - `GET /api/services/logs?name=...`
+- Skills:
+  - `GET /api/skills`
+  - `POST /api/skills/scan`
+  - `POST /api/skills`
+  - `POST /api/skills/toggle`
+  - `POST /api/skills/run`
+- Browser:
+  - `GET /api/browser/sessions`
+  - `POST /api/browser/session`
+  - `GET /api/browser/session?id=...`
+  - `POST /api/browser/open`
+  - `POST /api/browser/click`
+  - `POST /api/browser/submit`
+  - `POST /api/browser/screenshot`
+- OAuth:
+  - `GET /api/oauth/providers`
+  - `POST /api/oauth/start`
+  - `GET /api/oauth/callback`
+  - `POST /api/oauth/token`
+  - `POST /api/oauth/disconnect`
+- Hosting supervisor:
+  - `GET /api/hosting/deployments`
+  - `GET /api/hosting/latest?name=...`
+  - `POST /api/hosting/deploy`
+  - `POST /api/hosting/health`
+  - `POST /api/hosting/rollback`
+- Files:
+  - `GET /api/files?path=...`
+  - `GET /api/file?path=...`
+  - `POST /api/file`
+  - `POST /api/upload`
+- Web tools:
+  - `GET /api/webfetch?url=...`
+- Terminal fallback:
+  - `POST /api/exec`
+- VM lifecycle:
+  - `GET /api/vm/status`
+  - `POST /api/vm/create`
+  - `POST /api/vm/start`
+  - `POST /api/vm/stop`
+- WebSocket terminal:
+  - `/ws/term` (VM-backed when ready, local fallback otherwise)
+
+---
+
+## Data & Persistence
+
+Auto-created directories/files:
+
+- `data/nimbus.db` – SQLite DB
+- `workspace/` – working directory for tools/terminal defaults
+
+Persisted entities include:
+
+- settings
+- chats/chat_runs/chat_events (legacy sessions/messages remain compatible)
+- task_runs
+- memories
+- tasks
+- personas
+- services
+- vm_instances (tenant VM lifecycle + metadata)
+
+---
+
+## Multi-Tenant Notes
+
+The current backend includes tenant-aware schema and helpers (e.g., `tenant_id`, tenant context resolver). Some parts are tenant-scoped, while other parts still include backward-compatible/global behavior.
+
+If extending tenancy, review:
+
+- `src/tenancy/router.js`
+- `src/db.js`
+- `src/server.js`
+- `src/tools.js`
+- `src/services.js` / scheduler behavior
+
+---
+
+## Testing (Critical Path)
+
+Run server:
+
+```bash
+bun run dev
+```
+
+Example critical API checks with curl:
+
+```bash
+curl -s http://localhost:4000/api/status
+curl -s http://localhost:4000/api/settings
+curl -s "http://localhost:4000/api/files?path=."
+curl -s -X POST http://localhost:4000/api/chat \
+  -H "content-type: application/json" \
+  -d '{"message":"ping"}'
+```
+
+Frontend smoke checks:
+
+- Open `/app`
+- Verify provider/settings can be loaded and saved
+- Send one chat message and observe streaming/tool rendering
+- Open file browser and read/write one file
+- Open terminal tab and verify websocket connects
+
+## Proxmox VM Integration
+
+Nimbus can provision and control one VM per tenant using Proxmox.
+
+### Flow
+
+1. Tenant calls `POST /api/vm/create`
+2. Nimbus clones from configured template VM
+3. Nimbus applies cloud-init settings (user/password/ssh/network)
+4. Nimbus starts VM and waits for running state
+5. Nimbus stores VM metadata in `vm_instances`
+6. Terminal websocket (`/ws/term`) uses VM SSH execution when VM is ready
+
+### Required template prerequisites
+
+- Template must be a Proxmox QEMU VM template
+- Cloud-init support is strongly recommended
+- Guest agent is recommended for reliable IP discovery
+
+### Security guidance
+
+- Do not commit Proxmox credentials
+- Use environment variables only
+- Rotate tokens/passwords regularly
+- Use least-privilege API token where possible
+
+## Troubleshooting
+
+### Port already in use
+
+Set another port:
+
+```bash
+PORT=4010 bun run dev
+```
+
+### “No API key” / provider errors
+
+- Verify provider/key in **Mein Nimbus Space**
+- Confirm key format and permissions
+- Check fallback env vars if used
+
+### Chat not streaming
+
+- Inspect browser devtools network for `/api/chat`
+- Check server logs for provider API errors
+
+### Terminal not connecting
+
+- Ensure WebSocket path `/ws/term` is reachable
+- Confirm no reverse proxy/websocket misconfiguration
+
+### File operations failing
+
+- Validate path input in file browser/editor
+- Ensure workspace and permissions are available on host system
+
+---
+
+## Security Notes
+
+- `run_command` executes shell commands and can access system resources.
+- `delete_path` includes workspace safety checks.
+- API keys are sensitive; keep deployment private and secure.
+- Use network/firewall controls when exposing Nimbus beyond localhost.
+
+---
+
+## License
+
+MIT — see [LICENSE](./LICENSE).

@@ -1,6 +1,7 @@
 // Nimbus – Scheduler: prüft jede Minute Cron-Tasks und lässt sie vom Agenten ausführen
-import { db, getSetting } from "./db.js";
+import { db, createTaskRun, finishTaskRun } from "./db.js";
 import { runAgent, hasKey } from "./agent.js";
+import { buildTenantContext } from "./tenancy/router.js";
 
 // Minimaler Cron-Matcher: "min std tag monat wochentag" (mit * und */n und Listen a,b)
 function fieldMatches(field, value) {
@@ -28,9 +29,16 @@ function cronMatches(cron, date) {
   );
 }
 
-async function runTask(task) {
+const activeTasks = new Set();
+
+export async function runTask(task) {
+  const key = `${task.tenant_id || "default"}:${task.id}`;
+  if (activeTasks.has(key)) return { ok: false, error: "Task läuft bereits." };
+  activeTasks.add(key);
+  const runId = createTaskRun({ taskId: task.id, tenantId: task.tenant_id || "default" });
   const messages = [{ role: "user", content: task.prompt }];
   let output = "";
+  let error = "";
   try {
     await runAgent({
       messages,
@@ -39,13 +47,24 @@ async function runTask(task) {
       onEvent: (e) => {
         if (e.type === "text") output += e.text + "\n";
       },
+      tenantContext: buildTenantContext(task.tenant_id || "default"),
     });
   } catch (err) {
-    output = "Fehler: " + String(err.message || err);
+    error = String(err.message || err);
+    output = "Fehler: " + error;
   }
-  db.query("UPDATE tasks SET last_run = datetime('now'), last_result = ? WHERE id = ?")
-    .run(output.slice(0, 4000), task.id);
+  db.query("UPDATE tasks SET last_run = datetime('now'), last_result = ? WHERE id = ? AND tenant_id = ?")
+    .run(output.slice(0, 4000), task.id, task.tenant_id || "default");
+  finishTaskRun({ runId, status: error ? "error" : "done", result: output, error });
+  activeTasks.delete(key);
   console.log(`[scheduler] Task '${task.name}' ausgeführt.`);
+  return { ok: !error, run_id: runId, result: output, error: error || null };
+}
+
+export async function runTaskForTenant(taskId, tenantId) {
+  const task = db.query("SELECT * FROM tasks WHERE id = ? AND tenant_id = ?").get(taskId, tenantId || "default");
+  if (!task) return { ok: false, error: "Task nicht gefunden." };
+  return runTask(task);
 }
 
 let lastMinute = -1;
@@ -54,10 +73,12 @@ export function startScheduler() {
     const now = new Date();
     if (now.getMinutes() === lastMinute) return;
     lastMinute = now.getMinutes();
-    if (!hasKey()) return;
     const tasks = db.query("SELECT * FROM tasks WHERE enabled = 1").all();
     for (const task of tasks) {
-      if (cronMatches(task.cron, now)) runTask(task);
+      const tenant = buildTenantContext(task.tenant_id || "default");
+      if (hasKey(tenant) && cronMatches(task.cron, now)) {
+        runTask(task).catch((err) => console.error("[scheduler] task error", err));
+      }
     }
   }, 15000);
   console.log("[scheduler] gestartet (Cron-Auflösung: 1 Minute).");

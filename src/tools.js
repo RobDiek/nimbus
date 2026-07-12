@@ -1,14 +1,25 @@
-// Nimbus – Tool-Implementierungen für den Agenten
-import { db, WORKSPACE } from "./db.js";
+/* Nimbus – Tool-Implementierungen für den Agenten */
+import { db } from "./db.js";
 import { services } from "./services.js";
+import { logger } from "./logger.js";
+import { config } from "./config.js";
+import { listSkills, scanSkills, isToolAllowedBySkill } from "./skills.js";
+import { browserOpen, browserClick, browserSubmit, browserScreenshot } from "./browser.js";
+import { listOAuthProviders, startOAuth } from "./oauth.js";
+import { deployService, healthCheck, rollbackDeployment, listDeployments } from "./hosting.js";
 import { join, resolve, relative } from "path";
 import {
   readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, rmSync, existsSync,
 } from "fs";
 
+function tenantWorkspaceRoot(tenantContext) {
+  return tenantContext?.workspaceRoot || join(import.meta.dir, "..", "workspace");
+}
+
 // Pfade werden relativ zum Workspace aufgelöst; absolute Pfade sind erlaubt
 // (persönlicher Server, wie bei zo.computer: der Agent hat vollen Zugriff).
-function resolvePath(p) {
+function resolvePath(p, tenantContext) {
+  const WORKSPACE = tenantWorkspaceRoot(tenantContext);
   if (!p || p === ".") return WORKSPACE;
   return p.startsWith("/") ? p : resolve(join(WORKSPACE, p));
 }
@@ -20,9 +31,9 @@ function clip(s) {
 }
 
 // --- Shell ---
-export async function runCommand(command, cwd, timeoutMs = 120000) {
+export async function runCommand(command, cwd, timeoutMs = config.toolTimeoutMs, tenantContext) {
   const proc = Bun.spawn(["bash", "-lc", command], {
-    cwd: resolvePath(cwd),
+    cwd: resolvePath(cwd, tenantContext),
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, NIMBUS: "1" },
@@ -38,22 +49,30 @@ export async function runCommand(command, cwd, timeoutMs = 120000) {
 }
 
 // --- Dateisystem ---
-export function readFile(path) {
-  const full = resolvePath(path);
+export function readFile(path, tenantContext) {
+  const full = resolvePath(path, tenantContext);
   const st = statSync(full);
   if (st.size > 512 * 1024) return { error: "Datei größer als 512 KB – nutze run_command mit head/tail." };
   return { path: full, content: clip(readFileSync(full, "utf8")) };
 }
 
-export function writeFile(path, content) {
-  const full = resolvePath(path);
+export function writeFile(path, content, tenantContext) {
+  const full = resolvePath(path, tenantContext);
   mkdirSync(join(full, ".."), { recursive: true });
   writeFileSync(full, content ?? "");
   return { ok: true, path: full, bytes: Buffer.byteLength(content ?? "") };
 }
 
-export function listFiles(path) {
-  const full = resolvePath(path);
+export function writeFileBase64(path, content_base64, tenantContext) {
+  const full = resolvePath(path, tenantContext);
+  mkdirSync(join(full, ".."), { recursive: true });
+  const buf = Buffer.from(String(content_base64 || ""), "base64");
+  writeFileSync(full, buf);
+  return { ok: true, path: full, bytes: buf.byteLength };
+}
+
+export function listFiles(path, tenantContext) {
+  const full = resolvePath(path, tenantContext);
   const entries = readdirSync(full).slice(0, 500).map((name) => {
     try {
       const st = statSync(join(full, name));
@@ -65,8 +84,9 @@ export function listFiles(path) {
   return { path: full, entries };
 }
 
-export function deletePath(path) {
-  const full = resolvePath(path);
+export function deletePath(path, tenantContext) {
+  const WORKSPACE = tenantWorkspaceRoot(tenantContext);
+  const full = resolvePath(path, tenantContext);
   // Löschen nur innerhalb des Workspace – Schutz vor Agent-Fehlern
   if (relative(WORKSPACE, full).startsWith("..")) {
     return { error: "Löschen ist nur innerhalb des Workspace erlaubt." };
@@ -124,29 +144,34 @@ export async function webFetch(url) {
 }
 
 // --- Memory ---
-export function remember(content, tags = "") {
-  db.query("INSERT INTO memories (content, tags) VALUES (?, ?)").run(content, tags);
+export function remember(content, tags = "", tenantContext) {
+  const tenant_id = tenantContext?.userId || "default";
+  db.query("INSERT INTO memories (tenant_id, content, tags) VALUES (?, ?, ?)").run(tenant_id, content, tags);
   return { ok: true };
 }
 
-export function searchMemory(query = "") {
+export function searchMemory(query = "", tenantContext) {
+  const tenant_id = tenantContext?.userId || "default";
   const rows = query
-    ? db.query("SELECT * FROM memories WHERE content LIKE ? OR tags LIKE ? ORDER BY id DESC LIMIT 20")
-        .all(`%${query}%`, `%${query}%`)
-    : db.query("SELECT * FROM memories ORDER BY id DESC LIMIT 20").all();
+    ? db.query("SELECT * FROM memories WHERE tenant_id = ? AND (content LIKE ? OR tags LIKE ?) ORDER BY id DESC LIMIT 20")
+        .all(tenant_id, `%${query}%`, `%${query}%`)
+    : db.query("SELECT * FROM memories WHERE tenant_id = ? ORDER BY id DESC LIMIT 20").all(tenant_id);
   return { memories: rows };
 }
 
 // --- Scheduled Tasks ---
-export function scheduleTask(name, cron, prompt) {
-  db.query("INSERT INTO tasks (name, cron, prompt) VALUES (?, ?, ?)").run(name, cron, prompt);
+export function scheduleTask(name, cron, prompt, tenantContext) {
+  const tenant_id = tenantContext?.userId || "default";
+  db.query("INSERT INTO tasks (tenant_id, name, cron, prompt) VALUES (?, ?, ?, ?)").run(tenant_id, name, cron, prompt);
   return { ok: true, name, cron };
 }
-export function listTasks() {
-  return { tasks: db.query("SELECT * FROM tasks ORDER BY id").all() };
+export function listTasks(tenantContext) {
+  const tenant_id = tenantContext?.userId || "default";
+  return { tasks: db.query("SELECT * FROM tasks WHERE tenant_id = ? ORDER BY id").all(tenant_id) };
 }
-export function deleteTask(id) {
-  db.query("DELETE FROM tasks WHERE id = ?").run(id);
+export function deleteTask(id, tenantContext) {
+  const tenant_id = tenantContext?.userId || "default";
+  db.query("DELETE FROM tasks WHERE tenant_id = ? AND id = ?").run(tenant_id, id);
   return { ok: true };
 }
 
@@ -255,31 +280,192 @@ export const TOOL_DEFS = [
     description: "Liefert die letzten Log-Zeilen eines Services.",
     input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
   },
+  {
+    name: "list_skills",
+    description: "Listet registrierte SKILL.md-Fähigkeiten inklusive Scopes und Regeln.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "scan_skills",
+    description: "Scannt den Workspace-Ordner skills/**/SKILL.md und importiert Skills.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "browser_open",
+    description: "Öffnet eine URL in einer persistenten Browser-Session und extrahiert Text, Links und Formulare.",
+    input_schema: {
+      type: "object",
+      properties: { session_id: { type: "string" }, url: { type: "string" } },
+      required: ["url"],
+    },
+  },
+  {
+    name: "browser_click",
+    description: "Klickt in einer Browser-Session einen Link per Text oder Index.",
+    input_schema: {
+      type: "object",
+      properties: { session_id: { type: "string" }, text: { type: "string" }, index: { type: "number" } },
+      required: ["session_id"],
+    },
+  },
+  {
+    name: "browser_submit",
+    description: "Sendet ein extrahiertes HTML-Formular in einer Browser-Session ab.",
+    input_schema: {
+      type: "object",
+      properties: { session_id: { type: "string" }, form_index: { type: "number" }, fields: { type: "object" } },
+      required: ["session_id", "fields"],
+    },
+  },
+  {
+    name: "browser_screenshot",
+    description: "Gibt einen Screenshot-Ersatz der Browser-Session als textuelle Seitenaufnahme zurück.",
+    input_schema: { type: "object", properties: { session_id: { type: "string" } }, required: ["session_id"] },
+  },
+  {
+    name: "list_oauth_integrations",
+    description: "Listet OAuth-Integrationen und Verbindungsstatus.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "start_oauth_integration",
+    description: "Erzeugt eine OAuth-Autorisierungs-URL für einen Provider.",
+    input_schema: {
+      type: "object",
+      properties: { provider: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, redirect_uri: { type: "string" } },
+      required: ["provider"],
+    },
+  },
+  {
+    name: "deploy_hosting",
+    description: "Deployt einen Service mit versioniertem Hosting-Supervisor, Public URL, Healthcheck und Rollback-Historie.",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        command: { type: "string" },
+        cwd: { type: "string" },
+        port: { type: "number" },
+        health_path: { type: "string" },
+      },
+      required: ["name", "command"],
+    },
+  },
+  {
+    name: "hosting_healthcheck",
+    description: "Führt einen Healthcheck für ein Hosting-Deployment aus.",
+    input_schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+  },
+  {
+    name: "hosting_rollback",
+    description: "Rollt ein Hosting-Deployment auf die vorige oder angegebene Version zurück.",
+    input_schema: { type: "object", properties: { name: { type: "string" }, version: { type: "number" } }, required: ["name"] },
+  },
+  {
+    name: "list_hosting_deployments",
+    description: "Listet alle Hosting-Deployments und Versionen.",
+    input_schema: { type: "object", properties: {} },
+  },
 ];
 
 // --- Dispatcher ---
-export async function executeTool(name, input) {
+function ensureObjectInput(input) {
+  return (input && typeof input === "object") ? input : {};
+}
+
+function requireFields(input, fields) {
+  const missing = fields.filter((f) => input[f] === undefined || input[f] === null || input[f] === "");
+  if (missing.length) {
+    throw new Error(`Fehlende Pflichtfelder: ${missing.join(", ")}`);
+  }
+}
+
+const TOOL_REQUIREMENTS = {
+  run_command: ["command"],
+  read_file: ["path"],
+  write_file: ["path", "content"],
+  write_file_base64: ["path", "content_base64"],
+  delete_path: ["path"],
+  web_search: ["query"],
+  web_fetch: ["url"],
+  remember: ["content"],
+  schedule_task: ["name", "cron", "prompt"],
+  delete_task: ["id"],
+  start_service: ["name", "command"],
+  stop_service: ["name"],
+  service_logs: ["name"],
+  browser_open: ["url"],
+  browser_click: ["session_id"],
+  browser_submit: ["session_id", "fields"],
+  browser_screenshot: ["session_id"],
+  start_oauth_integration: ["provider"],
+  deploy_hosting: ["name", "command"],
+  hosting_healthcheck: ["name"],
+  hosting_rollback: ["name"],
+};
+
+export async function executeTool(name, input, tenantContext) {
+  const started = Date.now();
+  const safeInput = ensureObjectInput(input);
+
   try {
-    switch (name) {
-      case "run_command": return await runCommand(input.command, input.cwd);
-      case "read_file": return readFile(input.path);
-      case "write_file": return writeFile(input.path, input.content);
-      case "list_files": return listFiles(input.path);
-      case "delete_path": return deletePath(input.path);
-      case "web_search": return await webSearch(input.query);
-      case "web_fetch": return await webFetch(input.url);
-      case "remember": return remember(input.content, input.tags);
-      case "search_memory": return searchMemory(input.query);
-      case "schedule_task": return scheduleTask(input.name, input.cron, input.prompt);
-      case "list_tasks": return listTasks();
-      case "delete_task": return deleteTask(input.id);
-      case "start_service": return services.start(input.name, input.command, input.cwd);
-      case "stop_service": return services.stop(input.name);
-      case "list_services": return { services: services.list() };
-      case "service_logs": return services.logs(input.name);
-      default: return { error: `Unbekanntes Tool: ${name}` };
+    if (tenantContext?.activeSkill && !isToolAllowedBySkill(tenantContext.activeSkill, name)) {
+      throw new Error(`Tool '${name}' ist durch Skill-Scopes nicht erlaubt.`);
     }
+
+    const reqFields = TOOL_REQUIREMENTS[name];
+    if (reqFields) requireFields(safeInput, reqFields);
+
+    let result;
+    switch (name) {
+      case "run_command": result = await runCommand(safeInput.command, safeInput.cwd, config.toolTimeoutMs, tenantContext); break;
+      case "read_file": result = readFile(safeInput.path, tenantContext); break;
+      case "write_file": result = writeFile(safeInput.path, safeInput.content, tenantContext); break;
+      case "write_file_base64": result = writeFileBase64(safeInput.path, safeInput.content_base64, tenantContext); break;
+      case "list_files": result = listFiles(safeInput.path, tenantContext); break;
+      case "delete_path": result = deletePath(safeInput.path, tenantContext); break;
+      case "web_search": result = await webSearch(safeInput.query); break;
+      case "web_fetch": result = await webFetch(safeInput.url); break;
+      case "remember": result = remember(safeInput.content, safeInput.tags, tenantContext); break;
+      case "search_memory": result = searchMemory(safeInput.query, tenantContext); break;
+      case "schedule_task": result = scheduleTask(safeInput.name, safeInput.cron, safeInput.prompt, tenantContext); break;
+      case "list_tasks": result = listTasks(tenantContext); break;
+      case "delete_task": result = deleteTask(safeInput.id, tenantContext); break;
+      case "start_service": result = services.start(tenantContext?.userId || "default", safeInput.name, safeInput.command, safeInput.cwd, tenantWorkspaceRoot(tenantContext)); break;
+      case "stop_service": result = services.stop(tenantContext?.userId || "default", safeInput.name); break;
+      case "list_services": result = { services: services.list(tenantContext?.userId || "default") }; break;
+      case "service_logs": result = services.logs(tenantContext?.userId || "default", safeInput.name); break;
+      case "list_skills": result = { skills: listSkills(tenantContext) }; break;
+      case "scan_skills": result = scanSkills(tenantContext); break;
+      case "browser_open": result = await browserOpen(tenantContext, safeInput); break;
+      case "browser_click": result = await browserClick(tenantContext, safeInput); break;
+      case "browser_submit": result = await browserSubmit(tenantContext, safeInput); break;
+      case "browser_screenshot": result = browserScreenshot(tenantContext, safeInput); break;
+      case "list_oauth_integrations": result = { providers: listOAuthProviders(tenantContext) }; break;
+      case "start_oauth_integration": result = startOAuth(tenantContext, safeInput); break;
+      case "deploy_hosting": result = deployService(tenantContext, safeInput); break;
+      case "hosting_healthcheck": result = await healthCheck(tenantContext, safeInput.name); break;
+      case "hosting_rollback": result = rollbackDeployment(tenantContext, safeInput.name, safeInput.version); break;
+      case "list_hosting_deployments": result = { deployments: listDeployments(tenantContext) }; break;
+      default: result = { error: `Unbekanntes Tool: ${name}` };
+    }
+
+    logger.info("tool_execute", {
+      tool: name,
+      tenant: tenantContext?.userId || "default",
+      duration_ms: Date.now() - started,
+      ok: !result?.error,
+    });
+
+    return result;
   } catch (err) {
-    return { error: String(err?.message || err) };
+    const message = String(err?.message || err);
+    logger.error("tool_execute_failed", {
+      tool: name,
+      tenant: tenantContext?.userId || "default",
+      duration_ms: Date.now() - started,
+      error: message,
+    });
+    return { error: message };
   }
 }
