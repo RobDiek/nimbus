@@ -2,6 +2,7 @@
 import { getSettingTenant } from "./db.js";
 import { TOOL_DEFS, executeTool } from "./tools.js";
 import { config } from "./config.js";
+import { buildSkillSystemAppendix, selectRelevantSkills } from "./skills.js";
 
 const DEFAULT_PROVIDER = "anthropic";
 const DEFAULT_MODELS = {
@@ -322,6 +323,26 @@ async function runOpenAICompat({
 
 export async function runAgent({ messages, system, model, onEvent, tenantContext = { userId: "default" } }) {
   const tc = tenantContext || { userId: "default" };
+
+  let systemWithSkills = system;
+  if (!tc?.activeSkill) {
+    const userPrompt = (() => {
+      const lastUser = [...(messages || [])].reverse().find((m) => m?.role === "user");
+      if (!lastUser) return "";
+      if (typeof lastUser.content === "string") return lastUser.content;
+      if (Array.isArray(lastUser.content)) {
+        return lastUser.content
+          .filter((b) => b?.type === "text")
+          .map((b) => b.text || "")
+          .join("\n");
+      }
+      return "";
+    })();
+    const relevant = selectRelevantSkills(tc, userPrompt, 3);
+    if (relevant.length) {
+      systemWithSkills = `${system || ""}${buildSkillSystemAppendix(relevant)}`;
+    }
+  }
   // Alias: UI/UX may send "blackbox" but we route it to the existing "custom" provider implementation.
   const rawProvider = provider(tc);
   const p = rawProvider === "blackbox" ? "custom" : rawProvider;
@@ -334,13 +355,13 @@ export async function runAgent({ messages, system, model, onEvent, tenantContext
   }
 
   if (p === "anthropic") {
-    return runAnthropic({ messages, system, model, onEvent, tenantContext: tc });
+    return runAnthropic({ messages, system: systemWithSkills, model, onEvent, tenantContext: tc });
   }
 
   if (p === "openai") {
     return runOpenAICompat({
       messages,
-      system,
+      system: systemWithSkills,
       model: model || getSettingTenant(tenantId(tc), "model", DEFAULT_MODELS.openai) || DEFAULT_MODELS.openai,
       onEvent,
       baseUrl: "https://api.openai.com/v1",
@@ -354,7 +375,7 @@ export async function runAgent({ messages, system, model, onEvent, tenantContext
     // Gemini über OpenAI-kompatiblen Endpoint
     return runOpenAICompat({
       messages,
-      system,
+      system: systemWithSkills,
       model: model || getSettingTenant(tenantId(tc), "model", DEFAULT_MODELS.google) || DEFAULT_MODELS.google,
       onEvent,
       baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -378,7 +399,7 @@ export async function runAgent({ messages, system, model, onEvent, tenantContext
 
     return runOpenAICompat({
       messages,
-      system,
+      system: systemWithSkills,
       model: model || getSettingTenant(tenantId(tc), "model", DEFAULT_MODELS.custom) || DEFAULT_MODELS.custom,
       onEvent,
       baseUrl: base,
@@ -392,7 +413,7 @@ export async function runAgent({ messages, system, model, onEvent, tenantContext
     // OpenRouter is OpenAI-compatible for chat/completions at /v1
     return runOpenAICompat({
       messages,
-      system,
+      system: systemWithSkills,
       model: model || getSettingTenant(tenantId(tc), "model", DEFAULT_MODELS.openrouter) || DEFAULT_MODELS.openrouter,
       onEvent,
       baseUrl: "https://openrouter.ai/api/v1",

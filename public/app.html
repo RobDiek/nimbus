@@ -245,6 +245,23 @@
         </div>
         <div id="skillList" class="cardlist"></div>
 
+        <h2 class="sec-title">Skill Details / Test</h2>
+        <div class="card form-card">
+          <div class="row-form">
+            <input id="skillDetailId" placeholder="Skill-ID" style="max-width:120px" />
+            <button id="skillLoadDetail" class="btn">Details laden</button>
+            <button id="skillSaveDetail" class="btn dark">SKILL.md speichern</button>
+          </div>
+          <label>SKILL.md Inhalt</label>
+          <textarea id="skillContent" rows="10" class="mono" placeholder="SKILL.md Inhalt …"></textarea>
+          <label>Test-Prompt</label>
+          <textarea id="skillTestPrompt" rows="3" placeholder="Prompt für Skill-Testlauf …"></textarea>
+          <div class="row-form">
+            <button id="skillTestRun" class="btn dark">Skill-Testlauf</button>
+          </div>
+          <pre id="skillTestOut" class="logs card" style="max-height:260px;overflow:auto"></pre>
+        </div>
+
         <h2 class="sec-title">Personas</h2>
         <div class="card form-card">
           <div class="row-form">
