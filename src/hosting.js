@@ -1,4 +1,4 @@
-import { db } from "./db.js";
+import { db, encryptSecret, decryptSecret } from "./db.js";
 import { services } from "./services.js";
 
 const PORT_RANGE_START = 20000;
@@ -37,18 +37,27 @@ function allocateInternalPort(tId, preferred = null) {
   throw new Error("Keine freien internen Ports im Bereich 20000-29999 verfügbar.");
 }
 
-function publicUrls(tenantContext, serviceName, port) {
+function publicUrls(tenantContext, serviceName, port, customDomain = "", tlsEnabled = false) {
   const baseHost = process.env.NIMBUS_PUBLIC_HOST || tenantContext?.host || "localhost";
   const safe = String(serviceName || "service").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "service";
+  const cd = String(customDomain || "").trim().toLowerCase();
+
+  if (cd) {
+    return {
+      public_url: `http://${cd}`,
+      https_url: tlsEnabled ? `https://${cd}` : "",
+    };
+  }
+
   if (baseHost === "localhost" || baseHost.startsWith("localhost:")) {
     return {
       public_url: port ? `http://localhost:${port}` : "",
-      https_url: "",
+      https_url: tlsEnabled && port ? `https://localhost:${port}` : "",
     };
   }
   return {
     public_url: `http://${safe}.${baseHost}`,
-    https_url: `https://${safe}.${baseHost}`,
+    https_url: tlsEnabled ? `https://${safe}.${baseHost}` : "",
   };
 }
 
@@ -58,7 +67,14 @@ function healthUrlForPort(port, healthPath = "/") {
 }
 
 function mapDeployment(row) {
-  return row ? { ...row, port: row.port ?? null, rollback_of: row.rollback_of ?? null } : null;
+  return row ? {
+    ...row,
+    port: row.port ?? null,
+    rollback_of: row.rollback_of ?? null,
+    tls_enabled: Number(row.tls_enabled || 0),
+    cpu_limit: Number(row.cpu_limit || 0),
+    memory_limit_mb: Number(row.memory_limit_mb || 0),
+  } : null;
 }
 
 function addDeploymentEvent(tId, deployment, event_type, message, level = "info", payload = {}) {
@@ -84,27 +100,30 @@ function saveDeploymentEnv(tId, deploymentId, env = {}, secrets = {}) {
   const normSecrets = (secrets && typeof secrets === "object") ? secrets : {};
   const ins = db.query(`
     INSERT INTO hosting_deployment_env
-      (deployment_id, tenant_id, key, value, is_secret, created_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
+      (deployment_id, tenant_id, key, value, is_secret, value_encrypted, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
   `);
 
   for (const [k, v] of Object.entries(normEnv)) {
     if (!k) continue;
-    ins.run(deploymentId, tId, String(k), String(v ?? ""), 0);
+    ins.run(deploymentId, tId, String(k), String(v ?? ""), 0, "");
   }
   for (const [k, v] of Object.entries(normSecrets)) {
     if (!k) continue;
-    ins.run(deploymentId, tId, String(k), String(v ?? ""), 1);
+    const plain = String(v ?? "");
+    ins.run(deploymentId, tId, String(k), "", 1, encryptSecret(plain));
   }
 }
 
 function envForDeployment(tId, deploymentId) {
   const rows = db.query(`
-    SELECT key, value, is_secret FROM hosting_deployment_env
+    SELECT key, value, is_secret, value_encrypted FROM hosting_deployment_env
     WHERE tenant_id = ? AND deployment_id = ?
   `).all(tId, deploymentId);
   const out = {};
-  for (const r of rows) out[r.key] = r.value;
+  for (const r of rows) {
+    out[r.key] = Number(r.is_secret || 0) === 1 ? decryptSecret(r.value_encrypted) : r.value;
+  }
   return out;
 }
 
@@ -178,7 +197,19 @@ export function latestHealthyDeployment(tenantContext, serviceName) {
   `).get(tenantId(tenantContext), serviceName));
 }
 
-export function deployService(tenantContext, { name, command, cwd = "", port = null, health_path = "/", env = {}, secrets = {} }) {
+export function deployService(tenantContext, {
+  name,
+  command,
+  cwd = "",
+  port = null,
+  health_path = "/",
+  env = {},
+  secrets = {},
+  custom_domain = "",
+  tls_enabled = false,
+  cpu_limit = 0,
+  memory_limit_mb = 0,
+}) {
   if (!name || !command) throw new Error("name und command sind erforderlich.");
   const tId = tenantId(tenantContext);
   const old = latestDeployment(tenantContext, name);
@@ -188,16 +219,36 @@ export function deployService(tenantContext, { name, command, cwd = "", port = n
   const resolvedPort = allocateInternalPort(tId, parsedPort);
 
   const internalHealthUrl = healthUrlForPort(resolvedPort, health_path || "/");
-  const plannedUrls = publicUrls(tenantContext, name, resolvedPort);
+  const plannedUrls = publicUrls(tenantContext, name, resolvedPort, custom_domain, !!tls_enabled);
 
   db.query(`
     INSERT INTO hosting_deployments
-      (tenant_id, service_name, version, command, cwd, port, public_url, https_url, status, health_url, health_status, rollback_of)
-    VALUES (?, ?, ?, ?, ?, ?, '', '', 'starting', ?, 'unknown', NULL)
-  `).run(tId, name, version, command, cwd || "", resolvedPort, internalHealthUrl);
+      (tenant_id, service_name, version, command, cwd, port, public_url, https_url, status, health_url, health_status, rollback_of, custom_domain, tls_enabled, tls_status, cpu_limit, memory_limit_mb)
+    VALUES (?, ?, ?, ?, ?, ?, '', '', 'starting', ?, 'unknown', NULL, ?, ?, ?, ?, ?)
+  `).run(
+    tId,
+    name,
+    version,
+    command,
+    cwd || "",
+    resolvedPort,
+    internalHealthUrl,
+    String(custom_domain || ""),
+    tls_enabled ? 1 : 0,
+    tls_enabled ? "enabled" : "disabled",
+    Number(cpu_limit || 0),
+    Number(memory_limit_mb || 0)
+  );
 
   const dep = latestDeployment(tenantContext, name);
-  addDeploymentEvent(tId, dep, "deploy_started", `Deployment v${version} gestartet.`, "info", { port: resolvedPort, health_path });
+  addDeploymentEvent(tId, dep, "deploy_started", `Deployment v${version} gestartet.`, "info", {
+    port: resolvedPort,
+    health_path,
+    custom_domain,
+    tls_enabled: !!tls_enabled,
+    cpu_limit: Number(cpu_limit || 0),
+    memory_limit_mb: Number(memory_limit_mb || 0),
+  });
 
   if (dep?.id) saveDeploymentEnv(tId, dep.id, env, secrets);
 
@@ -241,7 +292,7 @@ export async function healthCheck(tenantContext, serviceName) {
   }
 
   if (status === "healthy") {
-    const urls = publicUrls(tenantContext, dep.service_name, dep.port);
+    const urls = publicUrls(tenantContext, dep.service_name, dep.port, dep.custom_domain, Number(dep.tls_enabled || 0) === 1);
     db.query(`
       UPDATE hosting_deployments
       SET health_status = ?, last_health_at = datetime('now'), public_url = ?, https_url = ?, status = 'running'
@@ -280,9 +331,23 @@ export function rollbackDeployment(tenantContext, serviceName, targetVersion = n
   const healthUrl = healthUrlForPort(port, "/");
   db.query(`
     INSERT INTO hosting_deployments
-      (tenant_id, service_name, version, command, cwd, port, public_url, https_url, status, health_url, health_status, rollback_of)
-    VALUES (?, ?, ?, ?, ?, ?, '', '', 'starting', ?, 'unknown', ?)
-  `).run(tId, serviceName, version, target.command, target.cwd, port, healthUrl, target.id);
+      (tenant_id, service_name, version, command, cwd, port, public_url, https_url, status, health_url, health_status, rollback_of, custom_domain, tls_enabled, tls_status, cpu_limit, memory_limit_mb)
+    VALUES (?, ?, ?, ?, ?, ?, '', '', 'starting', ?, 'unknown', ?, ?, ?, ?, ?, ?)
+  `).run(
+    tId,
+    serviceName,
+    version,
+    target.command,
+    target.cwd,
+    port,
+    healthUrl,
+    target.id,
+    target.custom_domain || "",
+    Number(target.tls_enabled || 0),
+    target.tls_status || "pending",
+    Number(target.cpu_limit || 0),
+    Number(target.memory_limit_mb || 0)
+  );
 
   const newDep = latestDeployment(tenantContext, serviceName);
   const env = target?.id ? envForDeployment(tId, target.id) : {};
@@ -313,4 +378,48 @@ export function listDeploymentEvents(tenantContext, serviceName = "", limit = 20
     ORDER BY created_at DESC, id DESC
     LIMIT ?
   `).all(tId, Number(limit || 200));
+}
+
+export function resolveHostedServiceForRequest(tenantContext, hostHeader = "", pathname = "/") {
+  const tId = tenantId(tenantContext);
+  const host = String(hostHeader || "").toLowerCase().split(":")[0];
+  if (!host) return null;
+
+  const byCustom = db.query(`
+    SELECT * FROM hosting_deployments
+    WHERE tenant_id = ? AND lower(custom_domain) = ? AND health_status = 'healthy'
+    ORDER BY version DESC LIMIT 1
+  `).get(tId, host);
+  if (byCustom) return { deployment: mapDeployment(byCustom), proxyPath: pathname || "/" };
+
+  const baseHost = String(process.env.NIMBUS_PUBLIC_HOST || tenantContext?.host || "").toLowerCase();
+  if (baseHost && host.endsWith(`.${baseHost}`)) {
+    const service = host.slice(0, -(baseHost.length + 1)).split(".").pop();
+    const dep = latestHealthyDeployment(tenantContext, service);
+    if (dep) return { deployment: dep, proxyPath: pathname || "/" };
+  }
+
+  return null;
+}
+
+export function recoverHostingSupervisor(tenantContext) {
+  const tId = tenantId(tenantContext);
+  const running = db.query(`
+    SELECT * FROM hosting_deployments
+    WHERE tenant_id = ? AND status = 'running'
+    ORDER BY id DESC
+  `).all(tId);
+
+  for (const dep of running) {
+    const env = envForDeployment(tId, dep.id);
+    const started = startServiceWithRestartPolicy(tenantContext, dep, env);
+    if (started?.error && !String(started.error).includes("läuft bereits")) {
+      addDeploymentEvent(tId, dep, "recover_failed", `Supervisor-Recovery fehlgeschlagen: ${started.error}`, "error");
+      db.query("UPDATE hosting_deployments SET status = 'failed' WHERE tenant_id = ? AND id = ?").run(tId, dep.id);
+    } else {
+      addDeploymentEvent(tId, dep, "recover_ok", "Service nach Server-Restart wiederhergestellt.", "info");
+    }
+  }
+
+  return { ok: true, recovered: running.length };
 }

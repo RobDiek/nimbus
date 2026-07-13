@@ -1,57 +1,29 @@
-# Nimbus Zo-Parity – Work TODO
+# Nimbus Parity Implementation TODO
 
-## 1) Datenbank erweitern
-- [x] `src/db.js`: Tabelle `hosting_deployment_events` hinzufügen
-- [x] `src/db.js`: Tabelle `hosting_deployment_env` hinzufügen
-- [x] `src/db.js`: `skills`-Schema um `triggers` erweitern (Migration/Best-Effort)
-- [x] `src/db.js`: nötige Indizes für neue Tabellen ergänzen
-
-## 2) Hosting-Supervisor härten
-- [x] `src/hosting.js`: interne Port-Zuweisung, wenn kein Port angegeben
-- [x] `src/hosting.js`: deploy mit optional `env`/`secrets`
-- [x] `src/hosting.js`: Deployment-Events/Logs in SQLite schreiben
-- [x] `src/hosting.js`: Healthcheck vor Veröffentlichung erzwingen
-- [x] `src/hosting.js`: `public_url` erst bei healthy aktiv setzen
-- [x] `src/hosting.js`: Restart-Policy für abgestürzte Services ergänzen
-- [x] `src/hosting.js`: API-Kompatibilität beibehalten (`deploy`, `health`, `rollback`, `deployments`)
-
-## 3) Proxy-Route
-- [x] `src/server.js`: optionale lokale Proxy-Route `/_host/:service/*` ergänzen
-
-## 4) Skill-System robuster machen
-- [x] `src/skills.js`: YAML-Frontmatter-Parser hinzufügen
-- [x] `src/skills.js`: Felder `name`, `description`, `scopes`, `rules`, `triggers` robust parsen
-- [x] `src/skills.js`: `triggers` persistieren und bei list/get zurückgeben
-- [x] `src/skills.js`: Relevanz-Selektion anhand Prompt (Top-N Skills) implementieren
-- [x] `src/agent.js`: relevante Skills statt globalem Volltext in System-Prompt nutzen
-
-## 5) Scope-Enforcement erweitern
-- [x] `src/tools.js`: Scope-Gruppen `tools:*`, `files:read/write`, `network:*`, `browser:*`, `hosting:*`, `oauth:provider` enforce’n
-- [x] `src/tools.js`: Scope-Verletzungen mit klaren Fehlermeldungen sichtbar machen
-
-## 6) Skills API erweitern
-- [x] `src/server.js`: `GET /api/skills/:id`
-- [x] `src/server.js`: `POST /api/skills/update`
-- [x] `src/server.js`: `POST /api/skills/test`
-
-## 7) UI für Skills erweitern
-- [x] `public/js/app.js`: Skill-Detailansicht
-- [x] `public/js/app.js`: SKILL.md bearbeiten/speichern
-- [x] `public/js/app.js`: Skill-Testlauf mit Prompt
-
-## 8) Validierung
-- [ ] Start-/Smoke-Test der Serverfunktionen
-- [ ] Hosting-Flows testen (`deploy`, `health`, `deployments`, `rollback`)
-- [ ] Skills-Flows testen (`scan`, `detail`, `update`, `test`)
-- [ ] Scope-Verletzungsfälle testen
-
-## 9) Echtes Browser-Backend (Playwright/Chromium)
-- [x] `src/browser.js`: Provider-Architektur einführen (Playwright + Fallback)
-- [x] `src/browser.js`: echte Chromium-Sessions pro Tenant isolieren (Cookies/Context)
-- [x] `src/browser.js`: echte Screenshots (Base64 + optional Datei) bereitstellen
-- [x] `src/browser.js`: DOM-/A11y-Snapshot ergänzen
-- [x] `src/browser.js`: Klick per Text, Selector und Koordinaten
-- [x] `src/browser.js`: Formularfelder setzen + Submit robust machen
-- [x] `src/browser.js`: Timeout/Close/Cleanup für Sessions
-- [x] `src/tools.js`: Browser-Tool-Input-Schema um selector/x/y erweitern (kompatibel)
-- [x] Kompatibilität der APIs sicherstellen (`/api/browser/open`, `/click`, `/submit`, `/screenshot`)
+- [x] Analyze requested full parity scope (hosting + workspace index/search + automations).
+- [x] Inspect relevant files (`src/db.js`, `src/hosting.js`, `src/scheduler.js`, `src/server.js`, `public/app.html`, `public/js/app.js`).
+- [ ] Extend DB schema/migrations:
+  - [ ] Hosting: custom domains, TLS fields, resource limits, encrypted secrets.
+  - [ ] Workspace index: file metadata (mime/checksum/text), tenant-scoped reindex tables, FTS search.
+  - [ ] Automations: RRULE/timezone, delivery channels, retry strategy, run details, chat/thread links.
+- [ ] Implement hosting backend upgrades:
+  - [ ] Domain/subdomain reverse-proxy routing.
+  - [ ] TLS/custom-domain resolution metadata.
+  - [ ] Persistent supervisor recovery after server restart.
+  - [ ] Deployment env/events/rollback UX support data.
+- [ ] Implement workspace indexing/search backend:
+  - [ ] MIME detection, text extraction, checksums.
+  - [ ] Tenant-scoped reindex endpoint.
+  - [ ] Full-text workspace search endpoint.
+- [ ] Implement automation backend upgrades:
+  - [ ] RRULE + timezone-aware scheduling.
+  - [ ] Retry policies and next-attempt logic.
+  - [ ] Delivery targets (mail/telegram/slack abstraction).
+  - [ ] Run detail retrieval endpoints.
+  - [ ] Link runs to chats/threads.
+- [ ] Update frontend (`public/app.html`, `public/js/app.js`):
+  - [ ] Hosting deployment UI expansion (events/env/rollbacks + domain/TLS/resource inputs).
+  - [ ] Workspace search/index controls and result rendering.
+  - [ ] Automation UI for RRULE/timezone/delivery/retries and run details.
+- [ ] Run validation checks and ensure server boots with migrations.
+- [ ] Mark all completed and provide implementation summary.

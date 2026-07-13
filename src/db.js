@@ -1,8 +1,8 @@
 // Nimbus – SQLite-Persistenz (bun:sqlite, keine externen Dependencies)
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "fs";
-import { createHash } from "crypto";
-import { join } from "path";
+import { mkdirSync, readdirSync, statSync, readFileSync } from "fs";
+import { createHash, createCipheriv, createDecipheriv, randomBytes } from "crypto";
+import { join, extname } from "path";
 
 export const ROOT = join(import.meta.dir, "..");
 export const WORKSPACE = join(ROOT, "workspace");
@@ -102,7 +102,12 @@ CREATE TABLE IF NOT EXISTS task_runs (
   started_at TEXT NOT NULL DEFAULT (datetime('now')),
   finished_at TEXT,
   result TEXT NOT NULL DEFAULT '',
-  error TEXT NOT NULL DEFAULT ''
+  error TEXT NOT NULL DEFAULT '',
+  attempt INTEGER NOT NULL DEFAULT 1,
+  delivery_status TEXT NOT NULL DEFAULT 'pending',
+  delivery_detail TEXT NOT NULL DEFAULT '',
+  linked_chat_id INTEGER,
+  linked_thread_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_tenant_task ON task_runs(tenant_id, task_id, started_at DESC);
 CREATE TABLE IF NOT EXISTS skills (
@@ -174,6 +179,11 @@ CREATE TABLE IF NOT EXISTS hosting_deployments (
   health_status TEXT NOT NULL DEFAULT 'unknown',
   last_health_at TEXT,
   rollback_of INTEGER,
+  custom_domain TEXT NOT NULL DEFAULT '',
+  tls_enabled INTEGER NOT NULL DEFAULT 0,
+  tls_status TEXT NOT NULL DEFAULT 'pending',
+  cpu_limit INTEGER NOT NULL DEFAULT 0,
+  memory_limit_mb INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_hosting_tenant_service_version ON hosting_deployments(tenant_id, service_name, version DESC);
@@ -201,6 +211,7 @@ CREATE TABLE IF NOT EXISTS hosting_deployment_env (
   key TEXT NOT NULL,
   value TEXT NOT NULL DEFAULT '',
   is_secret INTEGER NOT NULL DEFAULT 0,
+  value_encrypted TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_hosting_env_deployment ON hosting_deployment_env(deployment_id);
@@ -270,6 +281,54 @@ CREATE TABLE IF NOT EXISTS vm_terminal_sessions (
   last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_vm_terminal_sessions_tenant_status ON vm_terminal_sessions(tenant_id, status);
+
+CREATE TABLE IF NOT EXISTS workspace_file_index (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  path TEXT NOT NULL,
+  mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+  checksum TEXT NOT NULL DEFAULT '',
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  text_content TEXT NOT NULL DEFAULT '',
+  indexed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (tenant_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_file_index_tenant_path ON workspace_file_index(tenant_id, path);
+CREATE INDEX IF NOT EXISTS idx_workspace_file_index_tenant_mime ON workspace_file_index(tenant_id, mime);
+
+CREATE TABLE IF NOT EXISTS workspace_reindex_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  status TEXT NOT NULL DEFAULT 'queued',
+  files_total INTEGER NOT NULL DEFAULT 0,
+  files_indexed INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT,
+  finished_at TEXT,
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS automation_deliveries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  run_id INTEGER NOT NULL,
+  channel TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_automation_deliveries_tenant_run ON automation_deliveries(tenant_id, run_id);
+
+CREATE TABLE IF NOT EXISTS automation_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_id TEXT NOT NULL DEFAULT 'default',
+  task_id INTEGER NOT NULL,
+  chat_id INTEGER,
+  thread_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_automation_links_tenant_task ON automation_links(tenant_id, task_id);
 `);
 
 // --- SQLite schema migration (for existing nimbus.db without tenant_id) ---
@@ -300,6 +359,26 @@ function ensureColumn(table, column, ddl) {
 }
 
 ensureColumn("skills", "triggers", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("tasks", "rrule", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("tasks", "timezone", "TEXT NOT NULL DEFAULT 'UTC'");
+ensureColumn("tasks", "delivery_targets", "TEXT NOT NULL DEFAULT '[]'");
+ensureColumn("tasks", "retry_policy", "TEXT NOT NULL DEFAULT '{\"max_retries\":0,\"backoff_seconds\":60}'");
+ensureColumn("tasks", "linked_chat_id", "INTEGER");
+ensureColumn("tasks", "linked_thread_id", "TEXT NOT NULL DEFAULT ''");
+
+ensureColumn("task_runs", "attempt", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("task_runs", "delivery_status", "TEXT NOT NULL DEFAULT 'pending'");
+ensureColumn("task_runs", "delivery_detail", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("task_runs", "linked_chat_id", "INTEGER");
+ensureColumn("task_runs", "linked_thread_id", "TEXT NOT NULL DEFAULT ''");
+
+ensureColumn("hosting_deployments", "custom_domain", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("hosting_deployments", "tls_enabled", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("hosting_deployments", "tls_status", "TEXT NOT NULL DEFAULT 'pending'");
+ensureColumn("hosting_deployments", "cpu_limit", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("hosting_deployments", "memory_limit_mb", "INTEGER NOT NULL DEFAULT 0");
+
+ensureColumn("hosting_deployment_env", "value_encrypted", "TEXT NOT NULL DEFAULT ''");
 
 // Legacy databases used `key` as the sole primary key on settings. That
 // prevents two tenants from storing the same setting name. Rebuild the small
@@ -379,6 +458,75 @@ try {
 
 function normalizeTenantId(tenantId) {
   return (typeof tenantId === "string" && tenantId.trim()) ? tenantId.trim() : "default";
+}
+
+function workspacePathForTenant(tenantId) {
+  const tId = normalizeTenantId(tenantId);
+  if (tId === "default") return WORKSPACE;
+  return join(WORKSPACE, `tenant_${tId}`);
+}
+
+function mimeFromPath(filePath) {
+  const ext = extname(filePath).toLowerCase();
+  if ([".txt", ".md", ".js", ".ts", ".json", ".html", ".css", ".py", ".sh", ".yaml", ".yml"].includes(ext)) return "text/plain";
+  if (ext === ".pdf") return "application/pdf";
+  if (ext === ".csv") return "text/csv";
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(ext)) return "image/*";
+  return "application/octet-stream";
+}
+
+function extractTextForIndex(filePath, mime) {
+  try {
+    if (!String(mime).startsWith("text/") && mime !== "application/json" && mime !== "text/csv") return "";
+    return readFileSync(filePath, "utf8").slice(0, 200000);
+  } catch {
+    return "";
+  }
+}
+
+function collectFilesRecursive(root) {
+  const out = [];
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile()) out.push(full);
+    }
+  };
+  walk(root);
+  return out;
+}
+
+function secretKey() {
+  const raw = process.env.NIMBUS_SECRET_KEY || "nimbus-dev-secret-key-32-bytes-min";
+  return createHash("sha256").update(String(raw)).digest();
+}
+
+export function encryptSecret(plain) {
+  const iv = randomBytes(12);
+  const key = secretKey();
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const enc = Buffer.concat([cipher.update(String(plain || ""), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, enc]).toString("base64");
+}
+
+export function decryptSecret(cipherText) {
+  try {
+    const raw = Buffer.from(String(cipherText || ""), "base64");
+    const iv = raw.subarray(0, 12);
+    const tag = raw.subarray(12, 28);
+    const data = raw.subarray(28);
+    const key = secretKey();
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const dec = Buffer.concat([decipher.update(data), decipher.final()]);
+    return dec.toString("utf8");
+  } catch {
+    return "";
+  }
 }
 
 /** --- Settings (tenant-scoped) ---
@@ -790,6 +938,118 @@ export function listTaskRuns(tenantId, taskId, limit = 50) {
     ORDER BY started_at DESC, id DESC
     LIMIT ?
   `).all(tId, taskId, limit);
+}
+
+export function getTaskRunDetail(tenantId, runId) {
+  const tId = normalizeTenantId(tenantId);
+  const run = db.query("SELECT * FROM task_runs WHERE tenant_id = ? AND id = ?").get(tId, runId);
+  if (!run) return null;
+  const deliveries = db.query("SELECT * FROM automation_deliveries WHERE tenant_id = ? AND run_id = ? ORDER BY id ASC").all(tId, runId);
+  return { run, deliveries };
+}
+
+export function saveAutomationLink({ tenantId, taskId, chatId = null, threadId = "" }) {
+  const tId = normalizeTenantId(tenantId);
+  db.query(`
+    INSERT INTO automation_links (tenant_id, task_id, chat_id, thread_id, created_at)
+    VALUES (?, ?, ?, ?, datetime('now'))
+  `).run(tId, taskId, chatId, threadId || "");
+}
+
+export function listAutomationLinks(tenantId, taskId) {
+  const tId = normalizeTenantId(tenantId);
+  return db.query(`
+    SELECT * FROM automation_links
+    WHERE tenant_id = ? AND task_id = ?
+    ORDER BY id DESC
+  `).all(tId, taskId);
+}
+
+export function createAutomationDelivery({ tenantId, runId, channel, target = "", status = "pending", detail = "" }) {
+  const tId = normalizeTenantId(tenantId);
+  db.query(`
+    INSERT INTO automation_deliveries (tenant_id, run_id, channel, target, status, detail, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(tId, runId, channel, target, status, detail);
+}
+
+export function reindexWorkspaceForTenant(tenantId) {
+  const tId = normalizeTenantId(tenantId);
+  const ws = workspacePathForTenant(tId);
+  mkdirSync(ws, { recursive: true });
+
+  const jr = db.query(`
+    INSERT INTO workspace_reindex_jobs (tenant_id, status, files_total, files_indexed, started_at, created_at)
+    VALUES (?, 'running', 0, 0, datetime('now'), datetime('now'))
+  `).run(tId);
+  const jobId = Number(jr.lastInsertRowid);
+
+  try {
+    const files = collectFilesRecursive(ws);
+    db.query("UPDATE workspace_reindex_jobs SET files_total = ? WHERE id = ?").run(files.length, jobId);
+
+    const upsert = db.query(`
+      INSERT INTO workspace_file_index (tenant_id, path, mime, checksum, size_bytes, text_content, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(tenant_id, path) DO UPDATE SET
+        mime=excluded.mime,
+        checksum=excluded.checksum,
+        size_bytes=excluded.size_bytes,
+        text_content=excluded.text_content,
+        indexed_at=datetime('now')
+    `);
+
+    let idx = 0;
+    for (const full of files) {
+      const rel = full.startsWith(ws) ? full.slice(ws.length).replace(/^\/+/, "") : full;
+      const st = statSync(full);
+      const buf = readFileSync(full);
+      const checksum = createHash("sha256").update(buf).digest("hex");
+      const mime = mimeFromPath(full);
+      const text = extractTextForIndex(full, mime);
+      upsert.run(tId, rel, mime, checksum, Number(st.size || 0), text);
+      idx += 1;
+      if (idx % 25 === 0) db.query("UPDATE workspace_reindex_jobs SET files_indexed = ? WHERE id = ?").run(idx, jobId);
+    }
+
+    db.query(`
+      UPDATE workspace_reindex_jobs
+      SET status='done', files_indexed = ?, finished_at=datetime('now')
+      WHERE id = ?
+    `).run(idx, jobId);
+
+    return { ok: true, job_id: jobId, files_total: files.length, files_indexed: idx };
+  } catch (err) {
+    db.query(`
+      UPDATE workspace_reindex_jobs
+      SET status='error', error = ?, finished_at=datetime('now')
+      WHERE id = ?
+    `).run(String(err?.message || err), jobId);
+    return { ok: false, job_id: jobId, error: String(err?.message || err) };
+  }
+}
+
+export function searchWorkspaceIndex(tenantId, query = "", limit = 50) {
+  const tId = normalizeTenantId(tenantId);
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) {
+    return db.query(`
+      SELECT path, mime, checksum, size_bytes, indexed_at
+      FROM workspace_file_index
+      WHERE tenant_id = ?
+      ORDER BY indexed_at DESC
+      LIMIT ?
+    `).all(tId, Number(limit || 50));
+  }
+  return db.query(`
+    SELECT path, mime, checksum, size_bytes, indexed_at
+    FROM workspace_file_index
+    WHERE tenant_id = ?
+      AND (lower(path) LIKE '%' || lower(?) || '%'
+           OR lower(text_content) LIKE '%' || lower(?) || '%')
+    ORDER BY indexed_at DESC
+    LIMIT ?
+  `).all(tId, q, q, Number(limit || 50));
 }
 
 export function getVmInstance(tenantId) {
