@@ -290,6 +290,17 @@ function ensureTenantColumn(table) {
 
 ["settings", "sessions", "messages", "memories", "tasks", "services", "vm_instances", "vm_jobs", "vm_terminal_sessions", "personas", "chats", "chat_runs", "chat_shares", "skills", "oauth_connections", "oauth_states", "browser_sessions", "hosting_deployments", "hosting_deployment_events", "hosting_deployment_env"].forEach(ensureTenantColumn);
 
+function ensureColumn(table, column, ddl) {
+  if (columnExists(table, column)) return;
+  try {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl};`);
+  } catch (err) {
+    console.warn(`[db] column migration skipped for ${table}.${column}: ${String(err?.message || err)}`);
+  }
+}
+
+ensureColumn("skills", "triggers", "TEXT NOT NULL DEFAULT '[]'");
+
 // Legacy databases used `key` as the sole primary key on settings. That
 // prevents two tenants from storing the same setting name. Rebuild the small
 // table once so tenant-scoped settings can work on existing installations.
