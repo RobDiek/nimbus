@@ -526,7 +526,7 @@ const routes = {
   "POST /api/browser/open": async (req, _url, tenantContext) => json(await browserOpen(tenantContext, await body(req))),
   "POST /api/browser/click": async (req, _url, tenantContext) => json(await browserClick(tenantContext, await body(req))),
   "POST /api/browser/submit": async (req, _url, tenantContext) => json(await browserSubmit(tenantContext, await body(req))),
-  "POST /api/browser/screenshot": async (req, _url, tenantContext) => json(browserScreenshot(tenantContext, await body(req))),
+  "POST /api/browser/screenshot": async (req, _url, tenantContext) => json(await browserScreenshot(tenantContext, await body(req))),
 
   // --- OAuth Integrations ---
   "GET /api/oauth/providers": (_req, _url, tenantContext) => json({ providers: listOAuthProviders(tenantContext) }),

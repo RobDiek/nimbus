@@ -488,7 +488,7 @@ export async function executeTool(name, input, tenantContext) {
       case "browser_open": result = await browserOpen(tenantContext, safeInput); break;
       case "browser_click": result = await browserClick(tenantContext, safeInput); break;
       case "browser_submit": result = await browserSubmit(tenantContext, safeInput); break;
-      case "browser_screenshot": result = browserScreenshot(tenantContext, safeInput); break;
+      case "browser_screenshot": result = await browserScreenshot(tenantContext, safeInput); break;
       case "list_oauth_integrations": result = { providers: listOAuthProviders(tenantContext) }; break;
       case "start_oauth_integration": result = startOAuth(tenantContext, safeInput); break;
       case "deploy_hosting": result = deployService(tenantContext, safeInput); break;
