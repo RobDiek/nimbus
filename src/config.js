@@ -44,8 +44,8 @@ export const config = {
     ciUser: (process.env.PROXMOX_CI_USER || "ubuntu").trim(),
     ciSshPublicKey: (process.env.PROXMOX_CI_SSH_PUBLIC_KEY || "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK3dIaMkaR8OYgz9QIzNxhR4h9zkm98IVQVSem4DTF/q DiekerIT SSH Key").trim(),
     ciPassword: (process.env.PROXMOX_CI_PASSWORD || "").trim(),
-    // LAN hinter OpenWRT (vmbr1): 10.10.0.0/24
-    ipConfig: (process.env.PROXMOX_IPCONFIG || "ip=10.10.0.200/24,gw=10.10.0.1").trim(),
+    // auto = nächste freie 10.10.0.200-249
+    ipConfig: (process.env.PROXMOX_IPCONFIG || "auto").trim(),
     nameserver: (process.env.PROXMOX_NAMESERVER || "1.1.1.1").trim(),
     searchdomain: (process.env.PROXMOX_SEARCHDOMAIN || "agents.diekerit.com").trim(),
     sshConnectTimeoutSec: toNumber(process.env.PROXMOX_SSH_CONNECT_TIMEOUT_SEC, 5),

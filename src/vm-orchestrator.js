@@ -22,8 +22,8 @@ import {
   deployAgentToVm,
   waitForVmIp,
 } from "./proxmox.js";
+import { ensureOpenwrtForwards, portsForLanIp } from "./openwrt.js";
 import { deploySpaceToVm, ensureSpaceScaffold } from "./space.js";
-// Phase 1: Zoraxy-Routing bewusst manuell — kein ensureTenantIngress im Provision-Pfad.
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -229,26 +229,39 @@ class VmOrchestrator {
       }
 
       const hostname = publicHostnameForTenant(tenantId);
+      let openwrt = null;
+      if (vmData.ip_address) {
+        try {
+          openwrt = await ensureOpenwrtForwards({ lanIp: vmData.ip_address, slug: tenantId });
+        } catch (err) {
+          logger.warn("openwrt_forward_soft_fail", { tenantId, error: String(err?.message || err) });
+          openwrt = { ok: false, error: String(err?.message || err) };
+        }
+      }
+
+      const portInfo = portsForLanIp(vmData.ip_address || "");
       const meta = {
         ...(typeof vmData.metadata === "object" ? vmData.metadata : {}),
         public_hostname: hostname,
         public_url: `https://${hostname}`,
         ingress: {
-          mode: "manual",
-          note: "Zoraxy-Route manuell anlegen",
+          mode: "openwrt_dnat",
+          note: "Zoraxy optional/manuell auf WAN-Port mappen",
           target: vmData.ip_address ? `${vmData.ip_address}:${config.ingress.spacePort}` : null,
           hostname,
+          openwrt,
+          ports: portInfo,
         },
         agent_deploy: { ok: !!agentDeploy.ok, files: agentDeploy.files },
         space_deploy: { ok: !!spaceDeploy.ok, files: spaceDeploy.files },
       };
 
-      logger.info("provision_ready_manual_ingress", {
+      logger.info("provision_ready", {
         tenantId,
         vmid: vmData.vmid,
         ip: vmData.ip_address,
         hostname,
-        zoraxy_hint: `${hostname} → ${vmData.ip_address || "<IP>"}:${config.ingress.spacePort}`,
+        openwrt,
       });
 
       upsertVmInstance(tenantId, { state: "ready", last_error: "", metadata: meta });

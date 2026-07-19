@@ -2,6 +2,11 @@
 data/
 workspace/
 
+# Secrets / lokale Env (niemals committen)
+.env
+.env.local
+.env.*.local
+
 # Logs
 *.log
 

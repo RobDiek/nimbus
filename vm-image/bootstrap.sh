@@ -50,18 +50,30 @@ fi
 # Guest agent für IP-Erkennung
 systemctl enable --now qemu-guest-agent || true
 
-# --- Bun ---
-if ! command -v bun >/dev/null 2>&1; then
-  log "Installiere Bun…"
+# --- Bun (als Aufrufer-User, nicht nur root) ---
+install_bun_for() {
+  local user="$1" home
+  home="$(getent passwd "$user" | cut -d: -f6 || true)"
+  [[ -n "$home" ]] || return 0
+  if [[ ! -x "$home/.bun/bin/bun" ]]; then
+    log "Installiere Bun für $user …"
+    sudo -u "$user" -H bash -lc 'curl -fsSL https://bun.sh/install | bash' || true
+  fi
+  if [[ -x "$home/.bun/bin/bun" ]]; then
+    ln -sfn "$home/.bun/bin/bun" /usr/local/bin/bun
+  fi
+}
+
+# Primär CI-User ubuntu/nimbus
+for u in ubuntu nimbus; do
+  if id "$u" >/dev/null 2>&1; then install_bun_for "$u"; fi
+done
+if ! command -v bun >/dev/null 2>&1 && [[ ! -x /usr/local/bin/bun ]]; then
+  log "Fallback: Bun als root…"
   curl -fsSL https://bun.sh/install | bash
+  ln -sfn /root/.bun/bin/bun /usr/local/bin/bun || true
 fi
-# Bun systemweit verlinkbar machen
-if [[ -x /root/.bun/bin/bun ]]; then
-  ln -sf /root/.bun/bin/bun /usr/local/bin/bun
-elif [[ -x "$HOME/.bun/bin/bun" ]]; then
-  ln -sf "$HOME/.bun/bin/bun" /usr/local/bin/bun
-fi
-export PATH="/usr/local/bin:/root/.bun/bin:${HOME}/.bun/bin:${PATH}"
+export PATH="/usr/local/bin:/home/ubuntu/.bun/bin:/root/.bun/bin:${PATH}"
 log "bun=$(command -v bun || echo missing) $(bun --version 2>/dev/null || true)"
 
 # --- Node.js (optional, für Vite/Tooling) ---

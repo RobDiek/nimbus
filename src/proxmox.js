@@ -24,6 +24,7 @@ async function proxmoxRequest(path, init = {}) {
   const url = `${config.proxmox.baseUrl.replace(/\/+$/, "")}${path}`;
   const res = await fetch(url, {
     ...init,
+    tls: { rejectUnauthorized: false },
     headers: {
       Authorization: authHeader(),
       ...(init.headers || {}),
@@ -124,20 +125,19 @@ export async function cloneTenantVm(tenantId, vmidOverride) {
  * Cloud-Init: User, SSH, Netz + Hostname (für DNS/Ingress).
  * Hostname = Tenant-Slug; FQDN = <slug>.agents.diekerit.com
  */
-export async function configureTenantCloudInit(vmid, tenantId, username = config.proxmox.ciUser || "nimbus") {
+export async function configureTenantCloudInit(vmid, tenantId, username = config.proxmox.ciUser || "ubuntu", ipconfigOverride) {
   const p = config.proxmox;
   const slug = sanitizeTenantSlug(tenantId);
   const fqdn = publicHostnameForTenant(tenantId);
+  const resolved = ipconfigOverride || await resolveIpConfig();
 
   const body = encodeForm({
     ciuser: username,
     cipassword: p.ciPassword || undefined,
     sshkeys: p.ciSshPublicKey || undefined,
-    ipconfig0: p.ipConfig || "ip=dhcp",
+    ipconfig0: resolved.ipconfig,
     nameserver: p.nameserver || undefined,
     searchdomain: p.searchdomain || undefined,
-    // Proxmox setzt den Guest-Hostname typischerweise aus dem VM-Namen;
-    // name aktualisieren wir separat. Zusätzlich taggen wir den FQDN.
     description: `Nimbus workspace for ${slug} (${fqdn})`,
   });
 
@@ -152,14 +152,13 @@ export async function configureTenantCloudInit(vmid, tenantId, username = config
     );
   }
 
-  // Ressourcen + Name (Hostname-Quelle für Cloud-Init)
   await applyVmResources(vmid, {
     name: slug,
     cores: p.cpuCores,
     memory: p.memoryMb,
   });
 
-  return { ok: true, hostname: slug, fqdn };
+  return { ok: true, hostname: slug, fqdn, lanIp: resolved.lanIp, ipconfig: resolved.ipconfig };
 }
 
 export async function applyVmResources(vmid, { name, cores, memory } = {}) {
@@ -180,6 +179,59 @@ export async function applyVmResources(vmid, { name, cores, memory } = {}) {
     }
   );
   return { ok: true };
+}
+
+export async function resizeVmDisk(vmid, disk = "scsi0", sizeGb = config.proxmox.diskGb) {
+  const body = encodeForm({ disk, size: `${Number(sizeGb)}G` });
+  await proxmoxRequest(
+    `/api2/json/nodes/${encodeURIComponent(config.proxmox.node)}/qemu/${encodeURIComponent(vmid)}/resize`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+    }
+  );
+  return { ok: true, disk, sizeGb };
+}
+
+/** Nächste freie LAN-IP aus dem Pool. */
+export async function allocateLanIp() {
+  const start = config.proxmox.lanPoolStart;
+  const end = config.proxmox.lanPoolEnd;
+  const used = new Set(["10.10.0.1", "10.10.0.109", "10.10.0.200"]);
+
+  try {
+    const { listVmInstances } = await import("./db.js");
+    for (const row of listVmInstances()) {
+      if (row.ip_address) used.add(row.ip_address);
+      try {
+        const meta = typeof row.metadata === "string" ? JSON.parse(row.metadata || "{}") : (row.metadata || {});
+        if (meta.lan_ip) used.add(meta.lan_ip);
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+
+  for (let n = start; n <= end; n++) {
+    const cand = `10.10.0.${n}`;
+    if (!used.has(cand)) return cand;
+  }
+  throw new Error(`Kein freier LAN-IP im Pool 10.10.0.${start}-${end}`);
+}
+
+export async function resolveIpConfig() {
+  const raw = (config.proxmox.ipConfig || "auto").trim();
+  if (!raw || raw === "auto") {
+    const ip = await allocateLanIp();
+    return {
+      ipconfig: `ip=${ip}/24,gw=${config.proxmox.lanGateway}`,
+      lanIp: ip,
+    };
+  }
+  if (raw === "ip=dhcp" || raw === "dhcp") {
+    return { ipconfig: "ip=dhcp", lanIp: "" };
+  }
+  const m = raw.match(/ip=([0-9.]+)/);
+  return { ipconfig: raw, lanIp: m?.[1] || "" };
 }
 
 export async function waitForVmRunning(vmid, timeoutMs = 120000, intervalMs = 3000) {
@@ -226,7 +278,6 @@ export async function ensureTenantVm({ tenantId, existingVmid }) {
   const tenant = sanitizeTenantSlug(tenantId);
   const fqdn = publicHostnameForTenant(tenantId);
 
-  // Optional: Template vorab prüfen (hilft bei falscher VMID)
   try {
     const tpl = await getTemplateInfo(config.proxmox.templateVmid);
     logger.info("proxmox_template_ok", {
@@ -238,19 +289,35 @@ export async function ensureTenantVm({ tenantId, existingVmid }) {
     logger.warn("proxmox_template_check_failed", { error: String(err?.message || err) });
   }
 
+  const resolved = await resolveIpConfig();
   const clone = await cloneTenantVm(tenant, existingVmid);
-  await configureTenantCloudInit(clone.vmid, tenantId, config.proxmox.ciUser || "nimbus");
+
+  try {
+    await resizeVmDisk(clone.vmid, "scsi0", config.proxmox.diskGb);
+  } catch (err) {
+    logger.warn("proxmox_resize_soft", { vmid: clone.vmid, error: String(err?.message || err) });
+  }
+
+  await configureTenantCloudInit(
+    clone.vmid,
+    tenantId,
+    config.proxmox.ciUser || "ubuntu",
+    resolved
+  );
   await startVm(clone.vmid);
   await waitForVmRunning(clone.vmid, 180000, 4000);
-  const ip = await waitForVmIp(clone.vmid);
+
+  let ip = resolved.lanIp || "";
+  if (!ip) ip = await waitForVmIp(clone.vmid);
+  else await waitForVmIp(clone.vmid, 90000, 3000);
 
   return {
     provider: "proxmox",
     node: clone.node,
     vmid: clone.vmid,
     template_vmid: clone.templateVmid,
-    ip_address: ip || "",
-    username: config.proxmox.ciUser || "nimbus",
+    ip_address: ip || resolved.lanIp || "",
+    username: config.proxmox.ciUser || "ubuntu",
     cpu_cores: config.proxmox.cpuCores,
     memory_mb: config.proxmox.memoryMb,
     disk_gb: config.proxmox.diskGb,
@@ -258,6 +325,8 @@ export async function ensureTenantVm({ tenantId, existingVmid }) {
       vm_name: clone.name,
       hostname: tenant,
       public_hostname: fqdn,
+      lan_ip: ip || resolved.lanIp || "",
+      ipconfig: resolved.ipconfig,
       proxmox_base: config.proxmox.baseUrl,
       bridged_network: config.proxmox.bridge,
       space_port: config.ingress.spacePort,

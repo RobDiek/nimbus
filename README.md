@@ -103,39 +103,32 @@ Primary runtime options:
 
 Provider/model preferences are persisted in settings (`/api/settings`) and can fallback to env vars.
 
-Proxmox / Ingress options (see `MASTER_PLAN.md`):
+Copy `.env.example` → `.env` (gitignored). Bun loads `.env` automatically.
+
+Proxmox / Ingress options (see `MASTER_PLAN.md` / `docs/PHASE1_INVENTORY.md`):
 
 - `PROXMOX_ENABLED=true|false`
 - `PROXMOX_BASE_URL` (default: `https://45.84.197.121:8006`)
-- `PROXMOX_TOKEN_ID` (e.g. `nimbus@pve!api-token`)
+- `PROXMOX_TOKEN_ID` (e.g. `root@pam!nimbus`)
 - `PROXMOX_TOKEN_SECRET`
-- `PROXMOX_NODE`
-- `PROXMOX_STORAGE` (default: `local-lvm`)
-- `PROXMOX_BRIDGE` (default: `vmbr0`)
-- `PROXMOX_TEMPLATE_VMID` (default: `9000` — Ubuntu Golden Image)
-- `PROXMOX_VMID_START` (default: `5000`)
-- `PROXMOX_VM_CORES` (default: `2`)
-- `PROXMOX_VM_MEMORY_MB` (default: `4096`)
-- `PROXMOX_VM_DISK_GB` (default: `32`)
-- `PROXMOX_CI_USER` (default: `nimbus`)
+- `PROXMOX_NODE` (e.g. `DiekDataCenter1`)
+- `PROXMOX_STORAGE` (default: `local`)
+- `PROXMOX_BRIDGE` (default: `vmbr1`)
+- `PROXMOX_TEMPLATE_VMID` (default: `9000`)
+- `PROXMOX_CI_USER` (default: `ubuntu`)
 - `PROXMOX_CI_SSH_PUBLIC_KEY`
-- `PROXMOX_CI_PASSWORD`
-- `PROXMOX_IPCONFIG` (default: `ip=dhcp`)
-- `PROXMOX_NAMESERVER` (default: `1.1.1.1`)
-- `PROXMOX_SEARCHDOMAIN` (default: `agents.diekerit.com`)
-- `PROXMOX_SSH_CONNECT_TIMEOUT_SEC` (default: `5`)
-- `NIMBUS_BASE_DOMAIN` (default: `agents.diekerit.com`)
-- `NIMBUS_SPACE_PORT` (default: `3000`)
-- `NIMBUS_AGENT_PORT` (default: `8100`)
-- `ZORAXY_ENABLED=true|false`
-- `ZORAXY_BASE_URL` / `ZORAXY_API_TOKEN` or `ZORAXY_USERNAME`/`ZORAXY_PASSWORD`
-- `ZORAXY_CONFIG_DIR` (optional: write `.config` files instead of HTTP API)
+- `PROXMOX_IPCONFIG` (`auto` = next free `10.10.0.200-249`)
+- `OPENWRT_PASS` / `OPENWRT_WAN_IP` for DNAT port forwards
+- `ZORAXY_ENABLED` (optional; Phase 1 still manual DNS/Zoraxy hostname mapping)
 
 Provision a tenant VM from CLI:
 
 ```bash
-PROXMOX_ENABLED=true bun scripts/create_workspace.js robin
-# → robin.agents.diekerit.com
+# On Proxmox host
+OPENWRT_PASS='…' sudo -E bash scripts/host/create_workspace.sh robin
+
+# Or via Control Plane API (with .env configured)
+curl -X POST http://localhost:4000/api/vm/create
 ```
 
 ---
