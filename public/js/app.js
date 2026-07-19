@@ -1,113 +1,105 @@
-// Nimbus Console – Frontend (zo-Style)
+// Nimbus Workspace — zo-ähnliche Cloud-IDE (kein Infra-Admin)
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const api = {
   async get(p) { return (await fetch(p)).json(); },
-  async post(p, b) { return (await fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}) })).json(); },
+  async post(p, b) {
+    return (await fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}) })).json();
+  },
+  async del(p, b) {
+    return (await fetch(p, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}) })).json();
+  },
 };
-const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-const icon = (name, cls = "ic") => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
-const LOGO = `<svg viewBox="0 0 24 24" style="width:16px;height:16px"><path d="M6.5 17.5c-2.2 0-4-1.8-4-4 0-1.9 1.3-3.4 3-3.9C5.8 6.9 8.1 5 11 5c2.6 0 4.8 1.6 5.6 3.9 2.1.2 3.9 2 3.9 4.3 0 2.4-1.9 4.3-4.3 4.3h-9.7z" fill="currentColor" stroke="none"/></svg>`;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const icon = (n) => `<svg class="ic"><use href="#i-${n}"/></svg>`;
+const LOGO = `<svg viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M6.5 17.5c-2.2 0-4-1.8-4-4 0-1.9 1.3-3.4 3-3.9C5.8 6.9 8.1 5 11 5c2.6 0 4.8 1.6 5.6 3.9 2.1.2 3.9 2 3.9 4.3 0 2.4-1.9 4.3-4.3 4.3h-9.7z" fill="currentColor" stroke="none"/></svg>`;
 
-let state = { sessionId: null, personaId: null, streaming: false, showAllChats: false };
+const VIEWS = ["chat", "files", "automations", "integrations", "skills", "browser", "sites", "terminal", "settings"];
+let state = {
+  sessionId: null, personaId: null, streaming: false,
+  spaceBaseUrl: "", spaceHostname: "", filePath: ".", settingsTab: "ki",
+  ux: { language: "de", compact_chat: false, show_tool_details: true },
+};
 
-/* ============ Navigation ============ */
-function switchView(v) {
-  $$(".nav-item").forEach((x) => x.classList.toggle("active", x.dataset.view === v));
-  $$(".view").forEach((x) => x.classList.toggle("active", x.dataset.view === v));
-  onViewOpen(v);
+/* ===== Navigation ===== */
+function switchView(v, opts = {}) {
+  const view = v === "hosting" ? "sites" : (v === "start" ? "chat" : v);
+  if (!VIEWS.includes(view)) return;
+  $$(".nav-item").forEach((x) => x.classList.toggle("active", x.dataset.view === view));
+  $$(".panel.view").forEach((x) => x.classList.toggle("active", x.dataset.view === view));
+  if (location.hash.replace(/^#\/?/, "") !== view) history.replaceState(null, "", `#${view}`);
+  if (view === "settings" && opts.tab) openSettingsTab(opts.tab);
+  onViewOpen(view);
 }
-$$(".nav-item").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.view)));
-document.addEventListener("click", (e) => {
-  const g = e.target.closest("[data-goto]");
-  if (g) switchView(g.dataset.goto);
-});
-
-function initModelUIFromSettings(s) {
-  // requirement: fully writeable text input, and "every model i type" must work
-  // UI: dropdown (#modelSel) + text input (#modelCustomInput)
-  const modelSel = $("#modelSel");
-  const modelCustomInput = $("#modelCustomInput");
-  const providerSel = $("#providerSel");
-  if (providerSel && s?.provider) providerSel.value = s.provider;
-  if ($("#customBaseUrl")) $("#customBaseUrl").value = s?.customBaseUrl || "";
-  if (modelCustomInput) {
-    modelCustomInput.style.display = "";
-    modelCustomInput.value = (s?.model ?? modelCustomInput.value ?? "").toString();
-  }
-  if (modelSel) {
-    const known = [
-      "blackboxai/openai/gpt-oss-120b",
-      "claude-sonnet-5",
-      "gpt-4o-mini",
-      "gemini-1.5-flash",
-      "openai/gpt-4o-mini",
-    ];
-    const current = (s?.model ?? "").toString();
-    const options = current && !known.includes(current) ? [current, ...known] : known;
-    modelSel.innerHTML = options.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
-    modelSel.style.display = "";
-    modelSel.value = current || options[0] || "";
-  }
-}
-
-function ensureCustomInputAlwaysSane() {
-  const modelCustomInput = $("#modelCustomInput");
-  if (!modelCustomInput) return;
-  if (!modelCustomInput.value && $("#modelSel")?.value) modelCustomInput.value = $("#modelSel").value;
-}
-$$(".nav-item").forEach((t) => t.addEventListener("click", () => switchView(t.dataset.view)));
-document.addEventListener("click", (e) => {
-  const g = e.target.closest("[data-goto]");
-  if (g) switchView(g.dataset.goto);
-});
 
 function onViewOpen(v) {
-  if (v === "space") loadSpace();
-  if (v === "files") loadFiles(".");
-  if (v === "hosting") loadHosting();
+  if (v === "chat") $("#input")?.focus();
+  if (v === "files") loadFiles(state.filePath || ".");
   if (v === "automations") loadTasks();
-  if (v === "skills") { loadSkills(); loadPersonas(); }
   if (v === "integrations") loadIntegrations();
-  if (v === "browser") loadBrowserSessions();
-  if (v === "terminal") initTerminal();
-  if (v === "start") $("#input").focus();
+  if (v === "skills") { loadSkills(); loadPersonas(); }
+  if (v === "browser") { /* noop */ }
+  if (v === "sites") loadSpaceRoutes();
+  if (v === "terminal") { toggleTerm(true); ensureTerm("full"); }
+  if (v === "settings") loadSettingsAll();
 }
 
-/* ============ Status / Header ============ */
+document.addEventListener("click", (e) => {
+  const nav = e.target.closest("[data-view]");
+  if (nav && !nav.closest(".stab")) {
+    e.preventDefault();
+    const tab = nav.dataset.settingsTab;
+    switchView(nav.dataset.view, tab ? { tab } : {});
+  }
+});
+window.addEventListener("hashchange", () => {
+  const h = (location.hash || "#chat").replace(/^#\/?/, "");
+  switchView(h);
+});
+
+/* ===== Boot / Status ===== */
 async function initStatus() {
-  const [s, sys] = await Promise.all([api.get("/api/status"), api.get("/api/sysinfo")]);
-  $("#bCores").innerHTML = `${icon("cpu")}${sys.cores} cores`;
-  $("#bMem").innerHTML = `${icon("ram")}${sys.mem_gb} GB`;
-  const kb = $("#bKey");
-  kb.textContent = s.hasKey ? "● verbunden" : "● kein Key";
-  kb.className = "hbadge key-badge " + (s.hasKey ? "ok" : "bad");
-  $("#noKeyBanner").hidden = s.hasKey;
-  $("#send").disabled = !s.hasKey && !$("#input").value.trim() ? $("#send").disabled : $("#send").disabled;
+  const s = await api.get("/api/status");
+  $("#noKeyBanner").hidden = !!s.hasKey;
+  if ($("#userPill")) $("#userPill").textContent = s.tenant || "nimbus";
   await fillPersonaSelect();
   await loadRecent();
+  try {
+    const ux = await api.get("/api/ux");
+    if (ux?.ux) {
+      state.ux = { ...state.ux, ...ux.ux };
+      document.body.classList.toggle("compact-chat", !!state.ux.compact_chat);
+    }
+  } catch {}
+  try {
+    const ing = await api.get("/api/ingress/status");
+    if (ing?.hostname) {
+      state.spaceHostname = ing.hostname;
+      state.spaceBaseUrl = `https://${ing.hostname}`;
+    }
+  } catch {}
 }
 
 async function fillPersonaSelect() {
   const { personas } = await api.get("/api/personas");
   const sel = $("#personaSel");
-  sel.innerHTML = personas.map((p) => `<option value="${p.id}">${esc(p.name)}${p.model ? " · " + esc(p.model) : ""}</option>`).join("");
-  if (personas[0] && !state.personaId) state.personaId = personas[0].id;
-  sel.value = state.personaId;
+  if (!sel) return;
+  sel.innerHTML = (personas || []).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("");
+  if (personas?.[0] && !state.personaId) state.personaId = personas[0].id;
+  if (state.personaId) sel.value = state.personaId;
   sel.onchange = () => { state.personaId = Number(sel.value); };
 }
 
-/* ============ Recent Chats ============ */
+/* ===== Chats ===== */
 async function loadRecent(filter = "") {
   const { chats } = await api.get("/api/chats?q=" + encodeURIComponent(filter || "") + "&archived=false");
   const list = $("#recentList");
-  const shown = (chats || [])
-    .slice(0, state.showAllChats ? 200 : 8);
+  if (!list) return;
   list.innerHTML = "";
-  shown.forEach((s) => {
+  (chats || []).slice(0, 50).forEach((s) => {
     const b = document.createElement("button");
     b.className = "recent-item" + (s.id === state.sessionId ? " active" : "");
-    b.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${esc(s.title)}</span><span class="del" title="Löschen">${icon("x")}</span>`;
+    b.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${esc(s.title)}</span><span class="del">${icon("x")}</span>`;
     b.onclick = (e) => {
       if (e.target.closest(".del")) return deleteSession(s.id);
       openSession(s.id);
@@ -115,509 +107,306 @@ async function loadRecent(filter = "") {
     list.appendChild(b);
   });
 }
-$("#chatSearch").addEventListener("input", (e) => loadRecent(e.target.value));
-$("#viewAll").onclick = () => { state.showAllChats = !state.showAllChats; loadRecent($("#chatSearch").value); };
+$("#chatSearch")?.addEventListener("input", (e) => loadRecent(e.target.value));
 
 async function deleteSession(id) {
-  await fetch("/api/chats/" + encodeURIComponent(id), { method: "DELETE" });
+  await fetch("/api/chats/" + id, { method: "DELETE" });
   if (state.sessionId === id) newChat();
-  loadRecent();
+  else loadRecent();
 }
 
 async function openSession(id) {
   state.sessionId = id;
-  switchView("start");
-  const { messages } = await api.get("/api/messages?session_id=" + id);
-  const area = $("#chatArea");
-  area.classList.remove("empty");
-  const box = $("#messages");
-  box.innerHTML = "";
-  for (const m of messages) {
+  switchView("chat");
+  const { messages } = await api.get("/api/messages?session_id=" + encodeURIComponent(id));
+  $("#messages").innerHTML = "";
+  $("#chatArea").classList.remove("empty");
+  for (const m of messages || []) {
     if (m.role === "user") {
-      if (typeof m.content === "string") addUserMsg(m.content);
-      // Array-Content = interne tool_results → nicht anzeigen
+      const bubble = addMsg("user");
+      if (typeof m.content === "string") bubble.textContent = m.content;
+      else if (Array.isArray(m.content)) {
+        const text = m.content.filter((b) => b.type === "text").map((b) => b.text || "").join("\n");
+        bubble.textContent = text;
+      }
     } else {
-      const bubble = addAssistantShell();
-      for (const block of m.content) {
-        if (block.type === "text" && block.text.trim()) appendText(bubble, block.text);
-        if (block.type === "tool_use") bubble.appendChild(toolCallEl(block.name, block.input, false));
+      const bubble = addMsg("assistant");
+      if (typeof m.content === "string") appendMarkdown(bubble, m.content);
+      else if (Array.isArray(m.content)) {
+        m.content.forEach((b) => {
+          if (b.type === "text" && b.text?.trim()) appendMarkdown(bubble, b.text);
+          if (b.type === "tool_use" && state.ux?.show_tool_details !== false) {
+            bubble.appendChild(toolCallEl(b.name, b.input, false));
+          }
+        });
       }
     }
   }
-  box.scrollTop = box.scrollHeight;
+  updateShareBtn();
   loadRecent();
 }
 
-/* ============ Chat ============ */
-const messagesEl = $("#messages");
-const inputEl = $("#input");
-const sendBtn = $("#send");
+function newChat() {
+  state.sessionId = null;
+  $("#messages").innerHTML = "";
+  $("#chatArea").classList.add("empty");
+  switchView("chat");
+  updateShareBtn();
+  loadRecent();
+  $("#input")?.focus();
+}
+$("#newChat")?.addEventListener("click", newChat);
 
-const CHIP_SETS = [
-  [
-    { i: "doc", t: "Erstelle eine Status-Seite und hoste sie" },
-    { i: "term", t: "Zeig mir die Systemauslastung" },
-    { i: "clock", t: "Plane ein tägliches Briefing um 8 Uhr" },
-  ],
-  [
-    { i: "search", t: "Recherchiere die neuesten Bun-Releases" },
-    { i: "file", t: "Schreibe ein Python-Skript und führe es aus" },
-    { i: "server", t: "Starte einen Webserver auf Port 8080" },
-  ],
-  [
-    { i: "brain", t: "Merke dir: Ich arbeite mit Hetzner & M365" },
-    { i: "globe", t: "Extrahiere den Text von anthropic.com" },
-    { i: "folder", t: "Räume meinen Workspace auf" },
-  ],
-];
-let chipIdx = 0;
-function renderChips() {
-  $("#chipList").innerHTML = CHIP_SETS[chipIdx].map((c) =>
-    `<button class="chip">${icon(c.i)}${esc(c.t)}</button>`).join("");
-  $$("#chipList .chip").forEach((b, i) =>
-    b.onclick = () => sendMessage(CHIP_SETS[chipIdx][i].t));
+function updateShareBtn() {
+  const btn = $("#shareChat");
+  if (!btn) return;
+  btn.hidden = !state.sessionId;
 }
-$("#chipRefresh").onclick = () => { chipIdx = (chipIdx + 1) % CHIP_SETS.length; renderChips(); };
-$("#chipHide").onclick = () => $("#chips").style.display = "none";
-renderChips();
+$("#shareChat")?.addEventListener("click", async () => {
+  if (!state.sessionId) return;
+  const r = await api.post(`/api/chats/${state.sessionId}/share`, {});
+  if (r.link) {
+    try { await navigator.clipboard.writeText(r.link); } catch {}
+    $("#shareMsg").textContent = "Link kopiert";
+    setTimeout(() => { if ($("#shareMsg")) $("#shareMsg").textContent = ""; }, 2500);
+  } else {
+    $("#shareMsg").textContent = r.error || "Share fehlgeschlagen";
+  }
+});
 
-function addUserMsg(text) {
-  const w = document.createElement("div");
-  w.className = "msg user";
-  w.innerHTML = `<div class="av">Du</div><div class="bubble"><div class="text"></div></div>`;
-  w.querySelector(".text").textContent = text;
-  messagesEl.appendChild(w);
-  return w;
+function addMsg(role) {
+  $("#chatArea").classList.remove("empty");
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  el.innerHTML = role === "assistant"
+    ? `<div class="av">${LOGO}</div><div class="bubble"><div class="who">Nimbus</div><div class="text"></div></div>`
+    : `<div class="av">Du</div><div class="bubble"><div class="who">Du</div><div class="text"></div></div>`;
+  $("#messages").appendChild(el);
+  $("#messages").scrollTop = $("#messages").scrollHeight;
+  return el.querySelector(".text");
 }
-function addAssistantShell() {
-  const w = document.createElement("div");
-  w.className = "msg assistant";
-  w.innerHTML = `<div class="av">${LOGO}</div><div class="bubble"><div class="who">Nimbus</div></div>`;
-  messagesEl.appendChild(w);
-  return w.querySelector(".bubble");
+
+function appendMarkdown(el, text) {
+  let html = esc(text || "");
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = html.replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>');
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  el.innerHTML += html;
+  $("#messages").scrollTop = $("#messages").scrollHeight;
 }
-function appendText(bubble, text) {
-  const d = document.createElement("div");
-  d.className = "text";
-  d.innerHTML = esc(text).replace(/`([^`]+)`/g, "<code>$1</code>");
-  bubble.appendChild(d);
-}
+
 function toolCallEl(name, input, running = true) {
   const d = document.createElement("div");
   d.className = "tool-call" + (running ? " running" : "");
-  d.innerHTML = `<div class="tc-head">${icon("gear")}<b>${esc(name)}</b><svg class="ic arrow"><use href="#i-chev"/></svg></div><div class="tc-body">${esc(JSON.stringify(input, null, 2))}</div>`;
+  d.innerHTML = `<div class="tc-head"><b>${esc(name)}</b></div><div class="tc-body">${esc(typeof input === "string" ? input : JSON.stringify(input, null, 2))}</div>`;
   d.querySelector(".tc-head").onclick = () => d.classList.toggle("open");
   return d;
 }
 
-async function sendMessage(text) {
-  if (!text.trim() || state.streaming) return;
-  state.streaming = true;
-  sendBtn.disabled = true;
-  $("#chatArea").classList.remove("empty");
-  addUserMsg(text);
-  inputEl.value = ""; inputEl.style.height = "auto";
-
-  const bubble = addAssistantShell();
-  const typing = document.createElement("div");
-  typing.className = "typing"; typing.innerHTML = "<i></i><i></i><i></i>";
+async function sendChat() {
+  const input = $("#input");
+  const text = input.value.trim();
+  if (!text || state.streaming) return;
+  input.value = "";
+  autoSize(input);
+  addMsg("user").textContent = text;
+  const bubble = addMsg("assistant");
+  const typing = Object.assign(document.createElement("span"), { className: "typing", innerHTML: "<i></i><i></i><i></i>" });
   bubble.appendChild(typing);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-
+  state.streaming = true;
+  $("#send").disabled = true;
   try {
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: text, session_id: state.sessionId, persona_id: state.personaId }),
+      body: JSON.stringify({ message: text, chat_id: state.sessionId, persona_id: state.personaId }),
     });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
+    typing.remove();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
       const parts = buf.split("\n\n");
-      buf = parts.pop();
+      buf = parts.pop() || "";
       for (const part of parts) {
-        const line = part.replace(/^data: /, "");
-        if (!line.trim()) continue;
-        let e; try { e = JSON.parse(line); } catch { continue; }
-        typing.remove();
-        if (e.type === "session") { state.sessionId = e.session_id; loadRecent(); }
-        else if (e.type === "text") appendText(bubble, e.text);
-        else if (e.type === "tool_use") bubble.appendChild(toolCallEl(e.name, e.input));
-        else if (e.type === "tool_result") {
-          const last = bubble.querySelector(".tool-call.running");
-          if (last) {
-            last.classList.remove("running");
-            last.querySelector(".tc-body").textContent += "\n→ " + JSON.stringify(e.result, null, 2).slice(0, 4000);
+        if (!part.trim().startsWith("data:")) continue;
+        let e; try { e = JSON.parse(part.trim().slice(5).trim()); } catch { continue; }
+        if (e.type === "session") { state.sessionId = e.session_id || e.chat_id; loadRecent(); }
+        else if (e.type === "text") appendMarkdown(bubble, e.text);
+        else if (e.type === "tool_use") {
+          if (state.ux?.show_tool_details !== false) bubble.appendChild(toolCallEl(e.name, e.input));
+        } else if (e.type === "tool_result") {
+          const open = [...bubble.querySelectorAll(".tool-call.running")].pop();
+          if (open) {
+            open.classList.remove("running");
+            const body = open.querySelector(".tc-body");
+            if (body) body.textContent = typeof e.result === "string" ? e.result : JSON.stringify(e.result, null, 2);
           }
+        } else if (e.type === "error") {
+          bubble.appendChild(Object.assign(document.createElement("div"), { className: "err-text", textContent: e.error || "Fehler" }));
         }
-        else if (e.type === "error") {
-          const err = document.createElement("div");
-          err.className = "text err-text";
-          err.textContent = "⚠ " + e.error;
-          bubble.appendChild(err);
-        }
-        messagesEl.scrollTop = messagesEl.scrollHeight;
       }
     }
   } catch (err) {
     typing.remove();
-    const d = document.createElement("div");
-    d.className = "text err-text";
-    d.textContent = "⚠ Verbindungsfehler: " + err.message;
-    bubble.appendChild(d);
-  } finally {
-    state.streaming = false;
-    sendBtn.disabled = !inputEl.value.trim();
-    inputEl.focus();
+    bubble.appendChild(Object.assign(document.createElement("div"), { className: "err-text", textContent: String(err.message || err) }));
   }
-}
-
-sendBtn.onclick = () => sendMessage(inputEl.value);
-inputEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(inputEl.value); }
-});
-inputEl.addEventListener("input", () => {
-  inputEl.style.height = "auto";
-  inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
-  sendBtn.disabled = !inputEl.value.trim() || state.streaming;
-});
-function newChat() {
-  state.sessionId = null;
-  messagesEl.innerHTML = "";
-  $("#chatArea").classList.add("empty");
-  $("#chips").style.display = "";
-  switchView("start");
+  state.streaming = false;
+  $("#send").disabled = false;
+  updateShareBtn();
   loadRecent();
 }
-$("#newChat").onclick = newChat;
 
-/* ============ Terminal (WebSocket, persistente Session) ============ */
-let term = { ws: null, booted: false, hist: [], histIdx: -1 };
-const termOut = $("#termOut");
-const termCmd = $("#termCmd");
+function autoSize(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 180) + "px"; }
+$("#input")?.addEventListener("input", (e) => { autoSize(e.target); $("#send").disabled = !e.target.value.trim() || state.streaming; });
+$("#input")?.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } });
+$("#send")?.addEventListener("click", sendChat);
 
-function tPrint(text, cls = "") {
-  const d = document.createElement("div");
-  if (cls) d.className = cls;
-  d.textContent = text;
-  termOut.appendChild(d);
-  termOut.scrollTop = termOut.scrollHeight;
-}
-
-const BOOT_LINES = [
-  ["NimbusOS 1.0 — virtuelles System wird gestartet …", "t-sys", 0],
-  ["[  OK  ] Kernel geladen (bun " + "runtime)", "t-ok", 260],
-  ["[  OK  ] Dateisystem eingehängt  →  /workspace", "t-ok", 480],
-  ["[  OK  ] Netzwerk verbunden", "t-ok", 680],
-  ["[  OK  ] Bash-Session bereit", "t-ok", 880],
-  ["", "", 1000],
-];
-
-function initTerminal() {
-  termCmd.focus();
-  if (term.ws && term.ws.readyState === WebSocket.OPEN) return;
-
-  if (!term.booted) {
-    term.booted = true;
-    BOOT_LINES.forEach(([txt, cls, delay]) => setTimeout(() => tPrint(txt, cls), delay));
-  }
-
-  setTimeout(() => {
-    const ws = new WebSocket(`ws://${location.host}/ws/term`);
-    term.ws = ws;
-    ws.onopen = () => {
-      $("#termStatus").textContent = "verbunden";
-      $("#termStatus").classList.add("on");
-    };
-    ws.onmessage = (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.type === "out") {
-        // ANSI-Sequenzen entfernen
-        const clean = m.data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-        if (clean) tPrint(clean.replace(/\n$/, ""), m.kind === "err" ? "t-err" : "");
-      }
-      if (m.type === "exit") tPrint(`[Prozess beendet mit Code ${m.code}]`, "t-sys");
-    };
-    ws.onclose = () => {
-      $("#termStatus").textContent = "getrennt — Enter zum Neuverbinden";
-      $("#termStatus").classList.remove("on");
-      term.ws = null;
-    };
-    // Keepalive
-    const ka = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ping" }));
-      else clearInterval(ka);
-    }, 60000);
-  }, term.booted && termOut.children.length > 6 ? 0 : 1100);
-}
-
-termCmd.addEventListener("keydown", (e) => {
-  if (e.key === "ArrowUp") {
-    e.preventDefault();
-    if (term.histIdx < term.hist.length - 1) termCmd.value = term.hist[++term.histIdx] || "";
-    return;
-  }
-  if (e.key === "ArrowDown") {
-    e.preventDefault();
-    if (term.histIdx > 0) termCmd.value = term.hist[--term.histIdx] || "";
-    else { term.histIdx = -1; termCmd.value = ""; }
-    return;
-  }
-  if (e.key !== "Enter") return;
-  const cmd = termCmd.value;
-  termCmd.value = "";
-  term.histIdx = -1;
-  if (!term.ws || term.ws.readyState !== WebSocket.OPEN) { initTerminal(); return; }
-  if (!cmd.trim()) { tPrint("nimbus:~$", "t-cmd"); return; }
-  term.hist.unshift(cmd);
-  tPrint("nimbus:~$ " + cmd, "t-cmd");
-  term.ws.send(JSON.stringify({ type: "cmd", cmd }));
-});
-
-/* ============ Mein Space ============ */
-async function loadSpace() {
-  const [sys, s] = await Promise.all([api.get("/api/sysinfo"), api.get("/api/settings")]);
-  const up = sys.uptime_s > 3600 ? Math.floor(sys.uptime_s / 3600) + " h" : Math.floor(sys.uptime_s / 60) + " min";
-  $("#statGrid").innerHTML = `
-    <div class="stat"><div class="k">${icon("cpu")}CPU</div><div class="v">${sys.cores} <small>Cores</small></div></div>
-    <div class="stat"><div class="k">${icon("ram")}Arbeitsspeicher</div><div class="v">${sys.mem_gb} <small>GB</small></div></div>
-    <div class="stat"><div class="k">${icon("clock")}Uptime</div><div class="v">${up}</div></div>
-    <div class="stat"><div class="k">${icon("term")}System</div><div class="v">${esc(sys.platform)} <small>${esc(sys.arch)}</small></div></div>`;
-
-  initModelUIFromSettings(s);
-  ensureCustomInputAlwaysSane();
-
-  // NOTE: this file is now missing the old provider/model dropdown logic; keep it minimal.
-  // We only ensure the model input is editable and persists.
-  loadMemory();
-}
-$("#saveSettings").onclick = async () => {
-  // requirement: any model string user types must be sent as "model"
-  const modelSel = $("#modelSel");
-  const modelCustomInput = $("#modelCustomInput");
-
-  let model = "";
-  if (modelCustomInput && modelCustomInput.value?.trim()) model = modelCustomInput.value.trim();
-  else if (modelSel && modelSel.value?.trim()) model = modelSel.value.trim();
-
-  // preserve existing provider/key fields if they exist
-  const provider = $("#providerSel")?.value || "anthropic";
-  const anthropicApiKey = $("#apiKeyAnthropic")?.value || "";
-  const openaiApiKey = $("#apiKeyOpenAI")?.value || "";
-  const googleApiKey = $("#apiKeyGoogle")?.value || "";
-  const customApiKey = $("#apiKeyCustom")?.value || "";
-  const customBaseUrl = $("#customBaseUrl")?.value || "";
-
-  await api.post("/api/settings", {
-    provider,
-    model,
-    anthropicApiKey,
-    openaiApiKey,
-    googleApiKey,
-    customApiKey,
-    customBaseUrl,
-  });
-
-  if ($("#apiKeyAnthropic")) $("#apiKeyAnthropic").value = "";
-  if ($("#apiKeyOpenAI")) $("#apiKeyOpenAI").value = "";
-  if ($("#apiKeyGoogle")) $("#apiKeyGoogle").value = "";
-  if ($("#apiKeyCustom")) $("#apiKeyCustom").value = "";
-
-  $("#settingsMsg").textContent = "✓ Gespeichert";
-  initStatus();
-  setTimeout(() => $("#settingsMsg").textContent = "", 2500);
-};
-
-async function loadMemory() {
-  const { memories } = await api.get("/api/memories");
-  const list = $("#memList");
-  list.innerHTML = memories.length ? "" : `<p class="mut">Noch nichts gemerkt.</p>`;
-  memories.forEach((m) => {
-    const c = document.createElement("div");
-    c.className = "item-card";
-    c.innerHTML = `<div class="grow"><p style="color:var(--txt)">${esc(m.content)}</p>
-      <div class="meta">${esc(m.tags || "")} · ${esc(m.created_at)}</div></div>
-      <button class="icon-btn danger">${icon("trash")}</button>`;
-    c.querySelector(".icon-btn").onclick = async () => { await api.post("/api/memories/delete", { id: m.id }); loadMemory(); };
-    list.appendChild(c);
-  });
-}
-$("#memAdd").onclick = async () => {
-  const content = $("#memContent").value.trim(); if (!content) return;
-  await api.post("/api/memories", { content, tags: $("#memTags").value.trim() });
-  $("#memContent").value = ""; $("#memTags").value = ""; loadMemory();
-};
-
-/* ============ Dateien ============ */
+/* ===== Files ===== */
 let openPath = null;
+const fmtSize = (n) => n == null ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(1) + " MB";
+
 async function loadFiles(path) {
-  const r = await api.get("/api/files?path=" + encodeURIComponent(path));
-  $("#filePath").textContent = r.path || path;
+  state.filePath = path || ".";
+  const r = await api.get("/api/files?path=" + encodeURIComponent(state.filePath));
   const list = $("#fileList");
+  const cur = r.path || state.filePath;
+  $("#filePath").textContent = cur === "." ? "~" : cur;
   list.innerHTML = "";
-  if (r.path && r.path !== "/" && path !== ".") {
+  if (cur !== "." && cur !== "/") {
     const up = document.createElement("div");
-    up.className = "file-item";
-    up.innerHTML = `${icon("chev")}..`;
-    up.querySelector(".ic").style.transform = "rotate(180deg)";
+    up.className = "file-item dir";
+    up.innerHTML = `${icon("folder")}..`;
     up.onclick = () => {
-      const parent = r.path.split("/").slice(0, -1).join("/") || "/";
-      loadFiles(parent);
+      const parts = cur.replace(/\\/g, "/").split("/").filter(Boolean);
+      parts.pop();
+      loadFiles(parts.length ? parts.join("/") : ".");
     };
     list.appendChild(up);
   }
-  (r.entries || []).sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1))
+  (r.entries || []).sort((a, b) => a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1)
     .forEach((en) => {
+      const full = cur === "." ? en.name : cur.replace(/\/$/, "") + "/" + en.name;
       const it = document.createElement("div");
       it.className = "file-item" + (en.type === "dir" ? " dir" : "");
+      it.dataset.name = en.name.toLowerCase();
       it.innerHTML = `${icon(en.type === "dir" ? "folder" : "file")}${esc(en.name)}<span class="sz">${en.type === "file" ? fmtSize(en.size) : ""}</span>`;
-      it.onclick = () => {
-        const full = r.path + "/" + en.name;
-        en.type === "dir" ? loadFiles(full) : openFile(full, en.name);
-      };
+      it.onclick = () => en.type === "dir" ? loadFiles(full) : openFile(full, en.name);
       list.appendChild(it);
     });
+  applyFileFilter();
 }
-function fmtSize(b) { return b < 1024 ? b + " B" : b < 1048576 ? (b / 1024).toFixed(1) + " K" : (b / 1048576).toFixed(1) + " M"; }
+
 async function openFile(path, name) {
-  const r = await api.get("/api/file?path=" + encodeURIComponent(path));
-  if (r.error) { $("#fileContent").value = ""; $("#editorName").textContent = r.error; return; }
+  const r = await api.get("/api/files/read?path=" + encodeURIComponent(path));
+  if (r.error) { $("#uploadMsg").textContent = r.error; return; }
   openPath = path;
-  $("#editorName").textContent = name;
-  $("#fileContent").value = r.content;
+  $("#editorName").textContent = name || path;
+  $("#fileContent").value = r.content ?? "";
   $("#saveFile").disabled = false;
 }
-$("#saveFile").onclick = async () => {
+
+function applyFileFilter() {
+  const q = ($("#fileSearch")?.value || "").toLowerCase().trim();
+  $$("#fileList .file-item").forEach((it) => {
+    if (it.classList.contains("dir") && it.textContent.trim() === "..") return;
+    it.classList.toggle("hidden", q && !(it.dataset.name || "").includes(q));
+  });
+}
+$("#fileSearch")?.addEventListener("input", applyFileFilter);
+$("#saveFile")?.addEventListener("click", async () => {
   if (!openPath) return;
-  await api.post("/api/file", { path: openPath, content: $("#fileContent").value });
-  $("#editorName").textContent = $("#editorName").textContent.replace(" ✓", "") + " ✓";
-};
-
-/* ============ Hosting (Supervisor + Services) ============ */
-async function loadHosting() {
-  const [{ services }, { deployments }] = await Promise.all([
-    api.get("/api/services"),
-    api.get("/api/hosting/deployments"),
-  ]);
-  const latest = new Map();
-  (deployments || []).forEach((d) => {
-    if (!latest.has(d.service_name)) latest.set(d.service_name, d);
-  });
-  const list = $("#svcList");
-  list.innerHTML = services.length ? "" : `<p class="mut">Noch keine Services. Starte einen oben oder per Chat.</p>`;
-  services.forEach((s) => {
-    const dep = latest.get(s.name);
-    const c = document.createElement("div");
-    c.className = "item-card";
-    c.innerHTML = `<div class="grow"><h3>${esc(s.name)} <span class="badge ${s.status}">${s.status === "running" ? "läuft" : "gestoppt"}</span></h3>
-      <p class="mono">${esc(s.command)}</p>
-      ${dep ? `<div class="meta">v${dep.version} · health ${esc(dep.health_status)}${dep.public_url ? " · " + esc(dep.public_url) : ""}${dep.https_url ? " · " + esc(dep.https_url) : ""}</div>` : ""}
-      ${s.pid ? `<div class="meta">PID ${s.pid}</div>` : ""}</div>
-      <div style="display:flex;gap:6px">
-        <button class="icon-btn" data-a="logs">${icon("doc")}Logs</button>
-        <button class="icon-btn" data-a="health">${icon("pulse")}Health</button>
-        <button class="icon-btn" data-a="rollback">${icon("refresh")}Rollback</button>
-        <button class="icon-btn" data-a="toggle">${icon(s.status === "running" ? "stop" : "play")}${s.status === "running" ? "Stop" : "Start"}</button>
-        <button class="icon-btn danger" data-a="rm">${icon("trash")}</button>
-      </div>`;
-    c.querySelector('[data-a="logs"]').onclick = () => showLogs(s.name);
-    c.querySelector('[data-a="health"]').onclick = async () => { await api.post("/api/hosting/health", { name: s.name }); loadHosting(); };
-    c.querySelector('[data-a="rollback"]').onclick = async () => { await api.post("/api/hosting/rollback", { name: s.name }); loadHosting(); };
-    c.querySelector('[data-a="toggle"]').onclick = async () => {
-      if (s.status === "running") await api.post("/api/services/stop", { name: s.name });
-      else await api.post("/api/services/start", { name: s.name, command: s.command, cwd: s.cwd });
-      loadHosting();
+  const r = await api.post("/api/files/write", { path: openPath, content: $("#fileContent").value });
+  $("#uploadMsg").textContent = r.error || "Gespeichert";
+  setTimeout(() => { $("#uploadMsg").textContent = ""; }, 2000);
+});
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const s = String(reader.result || "");
+      const i = s.indexOf(",");
+      resolve(i >= 0 ? s.slice(i + 1) : s);
     };
-    c.querySelector('[data-a="rm"]').onclick = async () => { await api.post("/api/services/remove", { name: s.name }); loadHosting(); };
-    list.appendChild(c);
+    reader.onerror = () => reject(reader.error || new Error("Lesen fehlgeschlagen"));
+    reader.readAsDataURL(file);
   });
 }
-async function showLogs(name) {
-  $("#logTitle").textContent = "Logs · " + name;
-  const r = await api.get("/api/services/logs?name=" + encodeURIComponent(name));
-  $("#svcLogs").textContent = r.logs ? r.logs.join("\n") : (r.error || "Keine Logs.");
-}
-$("#svcStart").onclick = async () => {
-  const name = $("#svcName").value.trim(), command = $("#svcCmd").value.trim();
-  if (!name || !command) return;
-  const port = Number($("#svcPort").value.trim()) || undefined;
-  await api.post("/api/hosting/deploy", { name, command, port });
-  $("#svcName").value = ""; $("#svcCmd").value = ""; $("#svcPort").value = "";
-  loadHosting();
-};
+$("#uploadInput")?.addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  $("#uploadMsg").textContent = "Upload…";
+  try {
+    const b64 = await fileToBase64(file);
+    const base = state.filePath || ".";
+    const path = base === "." ? file.name : base.replace(/\/$/, "") + "/" + file.name;
+    const r = await api.post("/api/files/upload", { path, content_base64: b64 });
+    $("#uploadMsg").textContent = r.error || "Hochgeladen";
+    loadFiles(base);
+  } catch (err) {
+    $("#uploadMsg").textContent = String(err.message || err);
+  }
+  e.target.value = "";
+});
 
-/* ============ Automatisierungen ============ */
+/* ===== Automations ===== */
 async function loadTasks() {
   const { tasks } = await api.get("/api/tasks");
   const list = $("#taskList");
-  list.innerHTML = tasks.length ? "" : `<p class="mut">Noch keine Automatisierungen.</p>`;
-  tasks.forEach((t) => {
+  list.innerHTML = tasks?.length ? "" : `<p class="mut">Noch keine Automatisierungen.</p>`;
+  (tasks || []).forEach((t) => {
     const c = document.createElement("div");
     c.className = "item-card";
-    c.innerHTML = `<div class="grow"><h3>${esc(t.name)} <span class="badge ${t.enabled ? "on" : "off"}">${t.enabled ? "aktiv" : "pausiert"}</span></h3>
-      <p>${esc(t.prompt)}</p><div class="meta">cron ${esc(t.cron)}${t.last_run ? " · zuletzt " + esc(t.last_run) : ""}</div>
-      ${t.last_result ? `<p class="mut" style="margin-top:6px">↳ ${esc(t.last_result.slice(0, 220))}</p>` : ""}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="icon-btn" data-a="run">${icon("play")}Jetzt ausführen</button>
-        <button class="icon-btn" data-a="toggle">${icon(t.enabled ? "stop" : "play")}${t.enabled ? "Pause" : "Aktivieren"}</button>
-        <button class="icon-btn danger" data-a="del">${icon("trash")}</button>
-      </div>`;
-    c.querySelector('[data-a="run"]').onclick = async () => {
-      const btn = c.querySelector('[data-a="run"]');
-      btn.disabled = true;
-      await api.post("/api/tasks/run", { id: t.id });
-      btn.disabled = false;
-      loadTasks();
-    };
-    c.querySelector('[data-a="toggle"]').onclick = async () => { await api.post("/api/tasks/toggle", { id: t.id }); loadTasks(); };
+    c.innerHTML = `<div class="grow"><h3>${esc(t.name)} <span class="badge ${t.enabled ? "on" : "off"}">${t.enabled ? "an" : "aus"}</span></h3>
+      <p class="mono mut">${esc(t.cron)}</p><p class="mut">${esc(t.prompt || "")}</p></div>
+      <button class="icon-btn" data-a="run">Run</button>
+      <button class="icon-btn" data-a="tog">${t.enabled ? "Pause" : "Start"}</button>
+      <button class="icon-btn danger" data-a="del">${icon("trash")}</button>`;
+    c.querySelector('[data-a="run"]').onclick = async () => { await api.post("/api/tasks/run", { id: t.id }); };
+    c.querySelector('[data-a="tog"]').onclick = async () => { await api.post("/api/tasks/toggle", { id: t.id }); loadTasks(); };
     c.querySelector('[data-a="del"]').onclick = async () => { await api.post("/api/tasks/delete", { id: t.id }); loadTasks(); };
     list.appendChild(c);
   });
 }
-$("#taskAdd").onclick = async () => {
-  const name = $("#taskName").value.trim(), cron = $("#taskCron").value.trim(), prompt = $("#taskPrompt").value.trim();
+$("#taskAdd")?.addEventListener("click", async () => {
+  const name = $("#taskName").value.trim();
+  const cron = $("#taskCron").value.trim();
+  const prompt = $("#taskPrompt").value.trim();
   if (!name || !cron || !prompt) return;
   await api.post("/api/tasks", { name, cron, prompt });
   $("#taskName").value = ""; $("#taskCron").value = ""; $("#taskPrompt").value = "";
   loadTasks();
-};
+});
 
-/* ============ Integrationen ============ */
-const INT_META = {
-  gmail: ["#ea4335", "E-Mails lesen, durchsuchen und Entwürfe erstellen."],
-  outlook: ["#0078d4", "Microsoft-365-Postfach & Kalender."],
-  telegram: ["#2aabee", "Bot-Nachrichten senden und empfangen."],
-  gcal: ["#4285f4", "Termine lesen, erstellen und verschieben."],
-  slack: ["#611f69", "Channels lesen und Nachrichten posten."],
-  github: ["#24292f", "Repos, Issues und Pull Requests."],
-  gdrive: ["#0f9d58", "Dateien suchen und lesen."],
-};
+/* ===== Integrations ===== */
 async function loadIntegrations() {
   const { providers } = await api.get("/api/oauth/providers");
   const grid = $("#intGrid");
   grid.innerHTML = "";
-  (providers || []).forEach((it) => {
-    const [color, desc] = INT_META[it.id] || ["#4b5563", "OAuth-Integration"];
-    const isOn = it.status === "connected";
+  (providers || []).forEach((p) => {
+    const on = p.status === "connected";
     const c = document.createElement("div");
     c.className = "int-card";
-    c.innerHTML = `<div class="int-head"><span class="int-logo" style="background:${color}">${esc(it.name[0])}</span>
-      <h3>${esc(it.name)}</h3></div>
-      <p>${esc(desc)}</p>
+    c.innerHTML = `<h3>${esc(p.name)}</h3>
+      <span class="badge ${on ? "on" : "off"}">${on ? "verbunden" : "getrennt"}</span>
       <div class="int-foot">
-        <span class="badge ${isOn ? "on" : "off"}">${isOn ? "verbunden" : (it.configured ? "bereit" : "Client fehlt")}</span>
-        <button class="btn ${isOn ? "" : "dark"}">${isOn ? "Trennen" : "Verbinden"}</button>
+        <span class="mut">${p.configured ? "" : "Client-ID fehlt"}</span>
+        <button class="btn ${on ? "" : "dark"}" data-a="tog">${on ? "Trennen" : "Verbinden"}</button>
       </div>`;
-    c.querySelector(".btn").onclick = async () => {
-      if (isOn) await api.post("/api/oauth/disconnect", { provider: it.id });
+    c.querySelector("[data-a=tog]").onclick = async () => {
+      if (on) await api.post("/api/oauth/disconnect", { provider: p.id });
       else {
-        const r = await api.post("/api/oauth/start", { provider: it.id, redirect_uri: location.origin + "/api/oauth/callback" });
-        if (r.auth_url) window.open(r.auth_url, "_blank", "noopener");
-        else alert(r.error || r.setup || "OAuth nicht konfiguriert.");
+        if (p.id === "telegram") {
+          const token = prompt("Telegram Bot-Token");
+          if (token) await api.post("/api/oauth/token", { provider: "telegram", token });
+        } else {
+          const r = await api.post("/api/oauth/start", { provider: p.id, redirect_uri: location.origin + "/api/oauth/callback" });
+          if (r.url) location.href = r.url;
+          else if (r.error) alert(r.error);
+        }
       }
       loadIntegrations();
     };
@@ -625,191 +414,506 @@ async function loadIntegrations() {
   });
 }
 
-/* ============ Fähigkeiten (SKILL.md + Personas) ============ */
-async function loadSkillDetail(id) {
-  const out = $("#skillTestOut");
-  const r = await api.get("/api/skills/" + encodeURIComponent(id));
-  if (r.error || !r.skill) {
-    out.textContent = "Fehler: " + (r.error || "Skill nicht gefunden");
-    return;
-  }
-  $("#skillDetailId").value = r.skill.id;
-  $("#skillContent").value = r.skill.content || "";
-  out.textContent = `Skill geladen: ${r.skill.name}\nScopes: ${(r.skill.scopes || []).join(", ")}\nTriggers: ${(r.skill.triggers || []).join(", ")}`;
-}
-
+/* ===== Skills + Personas ===== */
 async function loadSkills() {
   const { skills } = await api.get("/api/skills");
   const list = $("#skillList");
-  list.innerHTML = skills?.length ? "" : `<p class="mut">Noch keine SKILL.md importiert. Lege einen Skill an oder scanne workspace/skills.</p>`;
+  list.innerHTML = skills?.length ? "" : `<p class="mut">Keine Skills. Scan oder neu anlegen.</p>`;
   (skills || []).forEach((s) => {
     const c = document.createElement("div");
     c.className = "item-card";
-    c.innerHTML = `<span class="avatar-initial">${esc(s.name[0] || "S")}</span>
-      <div class="grow"><h3>${esc(s.name)} <span class="badge ${s.enabled ? "on" : "off"}">${s.enabled ? "aktiv" : "aus"}</span></h3>
-      <p>${esc(s.description || "Keine Beschreibung")}</p>
-      <div class="meta">${esc((s.scopes || []).join(", "))}${s.source_path ? " · " + esc(s.source_path) : ""}</div></div>
-      <div style="display:flex;gap:6px">
-        <button class="icon-btn" data-a="detail">Details</button>
-        <button class="icon-btn" data-a="toggle">${s.enabled ? "Deaktivieren" : "Aktivieren"}</button>
-      </div>`;
-    c.querySelector('[data-a="detail"]').onclick = async () => {
-      await loadSkillDetail(s.id);
-      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
-    };
-    c.querySelector('[data-a="toggle"]').onclick = async () => {
+    c.innerHTML = `<div class="grow"><h3>${esc(s.name)} <span class="badge ${s.enabled ? "on" : "off"}">${s.enabled ? "an" : "aus"}</span></h3>
+      <p class="mut">${esc(s.description || "")}</p></div>
+      <button class="icon-btn" data-a="tog">${s.enabled ? "Aus" : "An"}</button>`;
+    c.querySelector("[data-a=tog]").onclick = async () => {
       await api.post("/api/skills/toggle", { id: s.id, enabled: !s.enabled });
       loadSkills();
     };
     list.appendChild(c);
   });
 }
-$("#skillScan").onclick = async () => { await api.post("/api/skills/scan"); loadSkills(); };
-$("#skillCreate").onclick = async () => {
+$("#skillScan")?.addEventListener("click", async () => { await api.post("/api/skills/scan", {}); loadSkills(); });
+$("#skillCreate")?.addEventListener("click", async () => {
   const name = $("#skillName").value.trim();
   if (!name) return;
-  await api.post("/api/skills", {
-    name,
-    scopes: $("#skillScopes").value,
-    rules: $("#skillRules").value,
-  });
-  $("#skillName").value = ""; $("#skillScopes").value = ""; $("#skillRules").value = "";
+  await api.post("/api/skills", { name, scopes: [], rules: [] });
+  $("#skillName").value = "";
   loadSkills();
-};
-
-$("#skillLoadDetail").onclick = async () => {
-  const id = $("#skillDetailId").value.trim();
-  if (!id) return;
-  await loadSkillDetail(id);
-};
-
-$("#skillSaveDetail").onclick = async () => {
-  const id = $("#skillDetailId").value.trim();
-  if (!id) return;
-  const r = await api.post("/api/skills/update", {
-    id: Number(id),
-    content: $("#skillContent").value || "",
-  });
-  $("#skillTestOut").textContent = r.ok ? "SKILL.md gespeichert." : ("Fehler: " + (r.error || "update failed"));
-  if (r.ok) loadSkills();
-};
-
-$("#skillTestRun").onclick = async () => {
-  const id = $("#skillDetailId").value.trim();
-  if (!id) return;
-  const prompt = $("#skillTestPrompt").value.trim();
-  const r = await api.post("/api/skills/test", {
-    skill_id: Number(id),
-    prompt,
-  });
-  if (r.ok) {
-    const errors = (r.events || []).filter((e) => e.type === "error");
-    $("#skillTestOut").textContent =
-      `Test ok\nEvents: ${(r.events || []).length}\n` +
-      (errors.length ? `Scope/Fehler:\n${errors.map((e) => JSON.stringify(e)).join("\n")}` : "Keine Fehler.");
-  } else {
-    $("#skillTestOut").textContent = `Test fehlgeschlagen:\n${r.error || "unknown"}\n\nEvents:\n${JSON.stringify(r.events || [], null, 2)}`;
-  }
-};
+});
 
 async function loadPersonas() {
   const { personas } = await api.get("/api/personas");
   const list = $("#personaList");
   list.innerHTML = "";
-  personas.forEach((p) => {
+  (personas || []).forEach((p) => {
     const c = document.createElement("div");
     c.className = "item-card";
-    c.innerHTML = `<span class="avatar-initial">${esc(p.name[0] || "?")}</span>
-      <div class="grow"><h3>${esc(p.name)} ${p.model ? `<span class="badge off mono">${esc(p.model)}</span>` : ""}</h3>
-      <p>${esc(p.system_prompt.slice(0, 200))}${p.system_prompt.length > 200 ? "…" : ""}</p></div>
-      <div style="display:flex;gap:6px">
-        <button class="icon-btn" data-a="edit">${icon("gear")}Bearbeiten</button>
-        <button class="icon-btn danger" data-a="del">${icon("trash")}</button>
-      </div>`;
-    c.querySelector('[data-a="edit"]').onclick = () => {
-      $("#pId").value = p.id; $("#pName").value = p.name;
-      $("#pModel").value = p.model; $("#pPrompt").value = p.system_prompt;
-      window.scrollTo(0, 0);
+    c.innerHTML = `<div class="grow"><h3>${esc(p.name)}</h3><p class="mut mono">${esc(p.model || "")}</p></div>
+      <button class="icon-btn" data-a="edit">Laden</button>
+      <button class="icon-btn danger" data-a="del">${icon("trash")}</button>`;
+    c.querySelector("[data-a=edit]").onclick = () => {
+      $("#pId").value = p.id; $("#pName").value = p.name; $("#pModel").value = p.model || "";
+      $("#pPrompt").value = p.system_prompt || "";
     };
-    c.querySelector('[data-a="del"]').onclick = async () => { await api.post("/api/personas/delete", { id: p.id }); loadPersonas(); fillPersonaSelect(); };
+    c.querySelector("[data-a=del]").onclick = async () => { await api.post("/api/personas/delete", { id: p.id }); loadPersonas(); fillPersonaSelect(); };
     list.appendChild(c);
   });
 }
-$("#pSave").onclick = async () => {
-  const name = $("#pName").value.trim(); if (!name) return;
+$("#pSave")?.addEventListener("click", async () => {
   await api.post("/api/personas", {
-    id: $("#pId").value || undefined, name,
-    model: $("#pModel").value.trim(), system_prompt: $("#pPrompt").value,
+    id: $("#pId").value ? Number($("#pId").value) : undefined,
+    name: $("#pName").value.trim(),
+    model: $("#pModel").value.trim(),
+    system_prompt: $("#pPrompt").value,
   });
-  $("#pClear").click(); loadPersonas(); fillPersonaSelect();
-};
-$("#pClear").onclick = () => { ["pId", "pName", "pModel", "pPrompt"].forEach((i) => $("#" + i).value = ""); };
+  $("#pClear").click();
+  loadPersonas(); fillPersonaSelect();
+});
+$("#pClear")?.addEventListener("click", () => {
+  $("#pId").value = ""; $("#pName").value = ""; $("#pModel").value = ""; $("#pPrompt").value = "";
+});
 
-/* ============ Browser ============ */
-let browserState = { sessionId: null };
-async function loadBrowserSessions() {
-  const { sessions } = await api.get("/api/browser/sessions");
-  const sel = $("#browserSessionSel");
-  if (!sel) return;
-  sel.innerHTML = (sessions || []).map((s) => `<option value="${esc(s.id)}">${esc(s.id)} · ${esc(s.title || s.current_url || "leer")}</option>`).join("");
-  if (!browserState.sessionId && sessions?.[0]) browserState.sessionId = sessions[0].id;
-  if (browserState.sessionId) sel.value = browserState.sessionId;
-  sel.onchange = () => browserState.sessionId = sel.value;
-}
-function showBrowserText(text) {
-  $("#browserHint").hidden = true;
-  $("#browserFrame").hidden = true;
-  const pre = $("#browserText");
-  pre.hidden = false;
-  pre.textContent = text || "";
-}
-async function loadUrl(asText = false) {
-  let url = $("#urlInput").value.trim();
+/* ===== Browser ===== */
+$("#urlGo")?.addEventListener("click", async () => {
+  const url = $("#urlInput").value.trim();
   if (!url) return;
-  if (!/^https?:\/\//.test(url)) url = "https://" + url;
-  $("#urlInput").value = url;
   $("#browserHint").hidden = true;
-  const r = await api.post("/api/browser/open", { session_id: browserState.sessionId, url });
-  if (r.session?.id) browserState.sessionId = r.session.id;
-  await loadBrowserSessions();
-  if (asText) {
-    showBrowserText(r.error ? "Fehler: " + r.error : r.session?.text);
-  } else {
-    $("#browserText").hidden = true;
-    const f = $("#browserFrame");
-    f.hidden = false;
-    f.src = r.session?.current_url || url;
-  }
-}
-$("#urlGo").onclick = () => loadUrl(false);
-$("#urlText").onclick = () => loadUrl(true);
-$("#urlShot").onclick = async () => {
-  if (!browserState.sessionId) return;
-  const r = await api.post("/api/browser/screenshot", { session_id: browserState.sessionId });
-  showBrowserText(r.screenshot_text || r.error || "");
-};
-$("#browserClick").onclick = async () => {
-  if (!browserState.sessionId) return;
-  const raw = $("#browserClickText").value.trim();
-  const payload = /^\d+$/.test(raw) ? { session_id: browserState.sessionId, index: Number(raw) } : { session_id: browserState.sessionId, text: raw };
-  const r = await api.post("/api/browser/click", payload);
-  if (r.session?.id) browserState.sessionId = r.session.id;
-  $("#urlInput").value = r.session?.current_url || $("#urlInput").value;
-  showBrowserText(r.error ? "Fehler: " + r.error : r.session?.text);
-  loadBrowserSessions();
-};
-$("#browserSubmit").onclick = async () => {
-  if (!browserState.sessionId) return;
-  let fields = {};
-  try { fields = JSON.parse($("#browserFormFields").value || "{}"); } catch { alert("Form JSON ist ungueltig."); return; }
-  const r = await api.post("/api/browser/submit", { session_id: browserState.sessionId, fields });
-  if (r.session?.id) browserState.sessionId = r.session.id;
-  $("#urlInput").value = r.session?.current_url || $("#urlInput").value;
-  showBrowserText(r.error ? "Fehler: " + r.error : r.session?.text);
-  loadBrowserSessions();
-};
-$("#urlInput").addEventListener("keydown", (e) => { if (e.key === "Enter") loadUrl(false); });
+  $("#browserText").textContent = "Lade…";
+  const r = await api.post("/api/browser/open", { url });
+  $("#browserText").textContent = r.text || r.error || JSON.stringify(r, null, 2);
+});
+$("#urlText")?.addEventListener("click", () => $("#urlGo").click());
+$("#urlInput")?.addEventListener("keydown", (e) => { if (e.key === "Enter") $("#urlGo").click(); });
 
-/* ============ Start ============ */
-initStatus();
-inputEl.focus();
+/* ===== Sites ===== */
+async function loadSpaceRoutes() {
+  const list = $("#spaceRouteList");
+  const hostEl = $("#spaceHostname");
+  if (hostEl) {
+    hostEl.textContent = state.spaceHostname
+      ? `Öffentlich: https://${state.spaceHostname}`
+      : "FQDN erscheint nach Provisionierung.";
+  }
+  const r = await api.get("/api/space/routes");
+  const routes = r.routes || [];
+  list.innerHTML = routes.length ? "" : `<p class="mut">Noch keine Routen.</p>`;
+  routes.forEach((route) => {
+    const isPublic = route.public !== false;
+    const href = state.spaceBaseUrl ? state.spaceBaseUrl.replace(/\/$/, "") + (route.path === "/" ? "" : route.path) : "";
+    const row = document.createElement("div");
+    row.className = "site-row";
+    row.innerHTML = `<span class="path">${esc(route.path)}</span>
+      <span class="badge">${esc(route.type || "page")}</span>
+      <span class="badge ${isPublic ? "public" : "private"}">${isPublic ? "public" : "private"}</span>
+      ${href ? `<a class="btn" href="${esc(href)}" target="_blank" rel="noopener">Öffnen</a>` : ""}
+      <button class="icon-btn danger" data-a="del">${icon("trash")}</button>`;
+    row.querySelector("[data-a=del]").onclick = async () => { await api.del("/api/space/routes", { path: route.path }); loadSpaceRoutes(); };
+    list.appendChild(row);
+  });
+}
+$("#spaceRefreshBtn")?.addEventListener("click", loadSpaceRoutes);
+$("#spaceRestartBtn")?.addEventListener("click", async () => {
+  $("#spaceMsg").textContent = "Neustart…";
+  const r = await api.post("/api/space/restart", {});
+  $("#spaceMsg").textContent = r.ok ? "Space Server neu gestartet." : (r.error || "Fehler");
+});
+$("#spaceSaveBtn")?.addEventListener("click", async () => {
+  const path = $("#spacePath").value.trim();
+  const code = $("#spaceCode").value;
+  if (!path || !code) { $("#spaceMsg").textContent = "Pfad und Code nötig."; return; }
+  const r = await api.post("/api/space/routes", { path, route_type: $("#spaceType").value, code, public: $("#spacePublic").checked });
+  $("#spaceMsg").textContent = r.error || `Gespeichert: ${r.route?.path || path}`;
+  if (!r.error) { $("#spaceCode").value = ""; loadSpaceRoutes(); }
+});
+
+/* ===== Settings tabs ===== */
+function openSettingsTab(tab) {
+  state.settingsTab = tab;
+  $$(".stab").forEach((b) => b.classList.toggle("active", b.dataset.stab === tab));
+  $$(".stab-panel").forEach((p) => p.classList.toggle("active", p.dataset.stabPanel === tab));
+}
+$$(".stab").forEach((b) => b.addEventListener("click", () => {
+  openSettingsTab(b.dataset.stab);
+  loadSettingsAll();
+}));
+
+const CHANNEL_LABELS = {
+  chat: "Chat", text: "Text", email: "E-Mail", telegram: "Telegram",
+  discord: "Discord", slack: "Slack", image: "Image",
+};
+
+async function loadSettingsAll() {
+  const s = await api.get("/api/settings");
+  initModelUI(s);
+  await loadChannelModels();
+  await loadChannelsUI();
+  await loadToolsUI();
+  await loadUxUI();
+  await loadSecretsUI();
+  await loadTokensUI();
+  await loadRestoreUI();
+  loadMemory();
+  renderProviderCards(s);
+}
+
+function initModelUI(s) {
+  if ($("#providerSel") && s?.provider) $("#providerSel").value = s.provider;
+  if ($("#customBaseUrl")) $("#customBaseUrl").value = s?.customBaseUrl || "";
+  const known = ["blackboxai/openai/gpt-oss-120b", "claude-sonnet-5", "gpt-4o-mini", "gemini-1.5-flash"];
+  const current = (s?.model || "").toString();
+  const opts = current && !known.includes(current) ? [current, ...known] : known;
+  if ($("#modelSel")) {
+    $("#modelSel").innerHTML = opts.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    $("#modelSel").value = current || opts[0];
+  }
+  if ($("#modelCustomInput")) $("#modelCustomInput").value = current;
+}
+
+function renderProviderCards(s) {
+  const box = $("#providerCards");
+  if (!box) return;
+  const cards = [
+    { id: "anthropic", name: "Anthropic", on: s.hasAnthropicKey },
+    { id: "openai", name: "OpenAI", on: s.hasOpenAIKey },
+    { id: "google", name: "Google", on: s.hasGoogleKey },
+    { id: "custom", name: "Custom", on: s.hasCustomKey },
+    { id: "blackbox", name: "Blackbox", on: s.provider === "blackbox" || s.hasCustomKey },
+  ];
+  box.innerHTML = cards.map((c) => `<div class="provider-card"><div class="name">${esc(c.name)}</div>
+    <div class="st ${c.on ? "on" : ""}">${c.on ? "Connected" : "Nicht verbunden"}</div></div>`).join("");
+}
+
+async function loadChannelModels() {
+  const r = await api.get("/api/channel-models");
+  const models = r.models || {};
+  const card = $("#channelModelsCard");
+  if (!card) return;
+  card.innerHTML = Object.keys(CHANNEL_LABELS).map((k) => {
+    const m = models[k] || {};
+    return `<div class="row-form">
+      <span style="min-width:90px;font-weight:600">${CHANNEL_LABELS[k]}</span>
+      <select data-cm-provider="${k}" style="max-width:140px">
+        <option value="default">Nimbus</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="openai">OpenAI</option>
+        <option value="google">Google</option>
+        <option value="custom">Custom</option>
+      </select>
+      <input data-cm-model="${k}" class="mono" placeholder="Modell" value="${esc(m.model || "")}" />
+    </div>`;
+  }).join("") + `<button id="channelModelsSave" class="btn dark">Modelle speichern</button>`;
+  Object.keys(CHANNEL_LABELS).forEach((k) => {
+    const sel = card.querySelector(`[data-cm-provider="${k}"]`);
+    if (sel) sel.value = models[k]?.provider || "default";
+  });
+  $("#channelModelsSave")?.addEventListener("click", async () => {
+    const patch = {};
+    Object.keys(CHANNEL_LABELS).forEach((k) => {
+      patch[k] = {
+        provider: card.querySelector(`[data-cm-provider="${k}"]`)?.value || "default",
+        model: card.querySelector(`[data-cm-model="${k}"]`)?.value || "",
+      };
+    });
+    await api.post("/api/channel-models", { models: patch });
+    $("#settingsMsg").textContent = "Modelle gespeichert";
+  });
+}
+
+$("#saveSettings")?.addEventListener("click", async () => {
+  const model = $("#modelCustomInput")?.value?.trim() || $("#modelSel")?.value || "";
+  await api.post("/api/settings", {
+    provider: $("#providerSel")?.value,
+    model,
+    anthropicApiKey: $("#apiKeyAnthropic")?.value || "",
+    openaiApiKey: $("#apiKeyOpenAI")?.value || "",
+    googleApiKey: $("#apiKeyGoogle")?.value || "",
+    customApiKey: $("#apiKeyCustom")?.value || "",
+    customBaseUrl: $("#customBaseUrl")?.value || "",
+    chatBackend: "auto",
+  });
+  ["apiKeyAnthropic", "apiKeyOpenAI", "apiKeyGoogle", "apiKeyCustom"].forEach((id) => { if ($("#" + id)) $("#" + id).value = ""; });
+  $("#settingsMsg").textContent = "Gespeichert";
+  initStatus();
+});
+
+async function loadChannelsUI() {
+  const r = await api.get("/api/channels");
+  const ch = r.channels || {};
+  renderChipList("#phoneList", ch.phones || [], (v) => {
+    ch.phones = (ch.phones || []).filter((x) => x !== v);
+    api.post("/api/channels", ch).then(loadChannelsUI);
+  });
+  renderChipList("#emailList", ch.emails || [], (v) => {
+    ch.emails = (ch.emails || []).filter((x) => x !== v);
+    api.post("/api/channels", ch).then(loadChannelsUI);
+  });
+  if ($("#noReplyConfirm")) $("#noReplyConfirm").checked = ch.no_reply_confirmation !== false;
+  const tg = ch.telegram;
+  $("#telegramStatus").textContent = tg?.connected ? `Verbunden als: ${tg.username || "bot"}` : "Nicht verbunden";
+}
+function renderChipList(sel, items, onRemove) {
+  const el = $(sel);
+  if (!el) return;
+  el.innerHTML = (items || []).map((v) => `<span class="chip-item">${esc(v)}<button type="button" data-v="${esc(v)}">${icon("x")}</button></span>`).join("");
+  el.querySelectorAll("button").forEach((b) => b.onclick = () => onRemove(b.dataset.v));
+}
+$("#phoneAdd")?.addEventListener("click", async () => {
+  const v = $("#phoneInput").value.trim();
+  if (!v) return;
+  const r = await api.get("/api/channels");
+  const ch = r.channels || {};
+  ch.phones = [...(ch.phones || []), v];
+  await api.post("/api/channels", ch);
+  $("#phoneInput").value = "";
+  loadChannelsUI();
+});
+$("#emailAdd")?.addEventListener("click", async () => {
+  const v = $("#emailInput").value.trim();
+  if (!v) return;
+  const r = await api.get("/api/channels");
+  const ch = r.channels || {};
+  ch.emails = [...(ch.emails || []), v];
+  await api.post("/api/channels", ch);
+  $("#emailInput").value = "";
+  loadChannelsUI();
+});
+$("#telegramConnect")?.addEventListener("click", async () => {
+  const token = $("#telegramToken").value.trim();
+  if (!token) return;
+  await api.post("/api/oauth/token", { provider: "telegram", token });
+  const r = await api.get("/api/channels");
+  const ch = r.channels || {};
+  ch.telegram = { connected: true, username: "bot" };
+  await api.post("/api/channels", ch);
+  $("#telegramToken").value = "";
+  loadChannelsUI();
+});
+$("#telegramDisconnect")?.addEventListener("click", async () => {
+  await api.post("/api/oauth/disconnect", { provider: "telegram" });
+  const r = await api.get("/api/channels");
+  const ch = r.channels || {};
+  ch.telegram = null;
+  await api.post("/api/channels", ch);
+  loadChannelsUI();
+});
+$("#channelsSave")?.addEventListener("click", async () => {
+  const r = await api.get("/api/channels");
+  const ch = r.channels || {};
+  ch.no_reply_confirmation = $("#noReplyConfirm")?.checked !== false;
+  await api.post("/api/channels", ch);
+  $("#channelsMsg").textContent = "Gespeichert";
+});
+
+async function loadToolsUI() {
+  const r = await api.get("/api/tools-settings");
+  const t = r.tools || {};
+  const box = $("#toolsToggles");
+  if (!box) return;
+  const labels = { web_search: "Websuche", browser: "Browser", shell: "Shell", space_routes: "Space-Routen" };
+  box.innerHTML = Object.keys(labels).map((k) =>
+    `<label class="check"><input type="checkbox" data-tool="${k}" ${t[k] !== false ? "checked" : ""}/> ${labels[k]}</label>`
+  ).join("");
+}
+$("#toolsSave")?.addEventListener("click", async () => {
+  const patch = {};
+  $$("#toolsToggles [data-tool]").forEach((el) => { patch[el.dataset.tool] = el.checked; });
+  await api.post("/api/tools-settings", patch);
+  $("#toolsMsg").textContent = "Gespeichert";
+});
+
+async function loadUxUI() {
+  const r = await api.get("/api/ux");
+  const ux = r.ux || {};
+  if ($("#uxLang")) $("#uxLang").value = ux.language || "de";
+  if ($("#uxCompact")) $("#uxCompact").checked = !!ux.compact_chat;
+  if ($("#uxTools")) $("#uxTools").checked = ux.show_tool_details !== false;
+}
+$("#uxSave")?.addEventListener("click", async () => {
+  const patch = {
+    language: $("#uxLang")?.value,
+    compact_chat: $("#uxCompact")?.checked,
+    show_tool_details: $("#uxTools")?.checked,
+  };
+  await api.post("/api/ux", patch);
+  state.ux = { ...state.ux, ...patch };
+  document.body.classList.toggle("compact-chat", !!state.ux.compact_chat);
+  $("#uxMsg").textContent = "Gespeichert";
+});
+
+async function loadMemory() {
+  const { memories } = await api.get("/api/memories");
+  const list = $("#memList");
+  if (!list) return;
+  list.innerHTML = memories?.length ? "" : `<p class="mut">Noch nichts gemerkt.</p>`;
+  (memories || []).forEach((m) => {
+    const c = document.createElement("div");
+    c.className = "item-card";
+    c.innerHTML = `<div class="grow"><p>${esc(m.content)}</p><div class="mut">${esc(m.tags || "")}</div></div>
+      <button class="icon-btn danger">${icon("trash")}</button>`;
+    c.querySelector("button").onclick = async () => { await api.post("/api/memories/delete", { id: m.id }); loadMemory(); };
+    list.appendChild(c);
+  });
+}
+$("#memAdd")?.addEventListener("click", async () => {
+  const content = $("#memContent").value.trim();
+  if (!content) return;
+  await api.post("/api/memories", { content, tags: $("#memTags").value.trim() });
+  $("#memContent").value = ""; $("#memTags").value = "";
+  loadMemory();
+});
+
+async function loadSecretsUI() {
+  const r = await api.get("/api/secrets");
+  const list = $("#secretList");
+  if (!list) return;
+  list.innerHTML = (r.secrets || []).map((s) =>
+    `<div class="secret-row"><span class="grow">${esc(s.key)}</span><span class="mut">${esc(s.masked)}</span>
+      <button class="icon-btn danger" data-k="${esc(s.key)}">${icon("trash")}</button></div>`
+  ).join("") || `<p class="mut">Keine Secrets.</p>`;
+  list.querySelectorAll("button[data-k]").forEach((b) => b.onclick = async () => {
+    await api.del("/api/secrets", { key: b.dataset.k });
+    loadSecretsUI();
+  });
+}
+$("#secretAdd")?.addEventListener("click", async () => {
+  await api.post("/api/secrets", { key: $("#secretKey").value, value: $("#secretVal").value });
+  $("#secretKey").value = ""; $("#secretVal").value = "";
+  loadSecretsUI();
+});
+
+async function loadTokensUI() {
+  const r = await api.get("/api/access-tokens");
+  const list = $("#tokenList");
+  if (!list) return;
+  list.innerHTML = (r.tokens || []).map((t) =>
+    `<div class="secret-row"><span class="grow">${esc(t.name)}</span><span class="mut">${esc(t.token_preview)}</span>
+      <button class="icon-btn danger" data-id="${esc(t.id)}">${icon("trash")}</button></div>`
+  ).join("") || `<p class="mut">Keine Tokens.</p>`;
+  list.querySelectorAll("button[data-id]").forEach((b) => b.onclick = async () => {
+    await api.del("/api/access-tokens", { id: b.dataset.id });
+    loadTokensUI();
+  });
+}
+$("#tokenAdd")?.addEventListener("click", async () => {
+  const r = await api.post("/api/access-tokens", { name: $("#tokenName").value.trim() || "token" });
+  $("#tokenName").value = "";
+  if (r.token) $("#tokenOnce").textContent = `Token (nur jetzt sichtbar): ${r.token}`;
+  loadTokensUI();
+});
+
+async function loadRestoreUI() {
+  const r = await api.get("/api/workspace/restore-points");
+  const list = $("#restoreList");
+  if (!list) return;
+  list.innerHTML = (r.points || []).map((p) =>
+    `<div class="secret-row"><span class="grow">${esc(new Date(p.at).toLocaleString("de-DE"))}</span>
+      <button class="btn" disabled title="Snapshot-Restore folgt">Restore</button></div>`
+  ).join("") || `<p class="mut">Noch keine Restore Points.</p>`;
+}
+$("#workspaceReboot")?.addEventListener("click", async () => {
+  $("#rebootMsg").textContent = "Reboot…";
+  const r = await api.post("/api/workspace/reboot", {});
+  $("#rebootMsg").textContent = r.ok ? "Workspace neu gestartet." : (r.error || "Fehler");
+  loadRestoreUI();
+});
+
+/* ===== Terminal (dock + full) ===== */
+const termState = { ws: null, dock: null, full: null, fitDock: null, fitFull: null, mode: "dock" };
+
+function setTermStatus(text, on) {
+  ["#termStatus", "#termStatusFull"].forEach((sel) => {
+    const el = $(sel);
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("on", !!on);
+  });
+}
+
+function createTerm(host) {
+  if (typeof Terminal === "undefined") return null;
+  const term = new Terminal({
+    cursorBlink: true, fontSize: 13,
+    fontFamily: 'ui-monospace, Menlo, monospace',
+    theme: { background: "#0f1216", foreground: "#d6dae1", cursor: "#34d399" },
+    convertEol: true,
+  });
+  let fit = null;
+  try {
+    const Fit = window.FitAddon?.FitAddon || window.FitAddon;
+    if (Fit) { fit = new Fit(); term.loadAddon(fit); }
+  } catch {}
+  term.open(host);
+  fit?.fit();
+  let line = "";
+  term.onData((data) => {
+    if (!termState.ws || termState.ws.readyState !== WebSocket.OPEN) {
+      if (data === "\r") connectTerm();
+      return;
+    }
+    if (data === "\r") {
+      const cmd = line; line = "";
+      term.write("\r\n");
+      termState.ws.send(JSON.stringify({ type: "cmd", cmd }));
+      return;
+    }
+    if (data === "\u007f") {
+      if (line.length) { line = line.slice(0, -1); term.write("\b \b"); }
+      return;
+    }
+    if (data >= " " || data === "\t") { line += data; term.write(data); }
+  });
+  return { term, fit };
+}
+
+function ensureTerm(mode = "dock") {
+  termState.mode = mode;
+  if (mode === "full") {
+    if (!termState.full && $("#xtermFull")) termState.full = createTerm($("#xtermFull"));
+    termState.full?.fit?.fit();
+    return termState.full?.term;
+  }
+  if (!termState.dock && $("#xterm")) termState.dock = createTerm($("#xterm"));
+  termState.dock?.fit?.fit();
+  return termState.dock?.term;
+}
+
+function connectTerm() {
+  ensureTerm(termState.mode);
+  if (termState.ws && termState.ws.readyState === WebSocket.OPEN) return;
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws/term`);
+  termState.ws = ws;
+  setTermStatus("verbindet…", false);
+  ws.onopen = () => setTermStatus("verbunden", true);
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    const write = (t) => {
+      termState.dock?.term?.write(t);
+      termState.full?.term?.write(t);
+    };
+    if (m.type === "ready") { write("\x1b[90mShell bereit\x1b[0m\r\n"); setTermStatus("verbunden", true); }
+    if (m.type === "out" && m.data) write(String(m.data).replace(/\n/g, "\r\n"));
+    if (m.type === "exit") { write(`\r\n\x1b[90m[exit ${m.code}]\x1b[0m\r\n`); setTermStatus("getrennt", false); }
+  };
+  ws.onclose = () => { setTermStatus("getrennt", false); termState.ws = null; };
+}
+
+function toggleTerm(forceOpen) {
+  const dock = $("#termDock");
+  if (!dock) return;
+  const open = forceOpen === true ? true : forceOpen === false ? false : dock.classList.contains("collapsed");
+  dock.classList.toggle("collapsed", !open);
+  if (open) { ensureTerm("dock"); connectTerm(); requestAnimationFrame(() => termState.dock?.fit?.fit()); }
+}
+$("#termToggle")?.addEventListener("click", () => toggleTerm());
+window.addEventListener("resize", () => {
+  if (!$("#termDock")?.classList.contains("collapsed")) termState.dock?.fit?.fit();
+  termState.full?.fit?.fit();
+});
+
+/* ===== Boot ===== */
+(async function boot() {
+  await initStatus();
+  const h = (location.hash || "#chat").replace(/^#\/?/, "");
+  switchView(h || "chat");
+})();

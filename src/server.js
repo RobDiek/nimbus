@@ -36,9 +36,21 @@ import { services } from "./services.js";
 import { startScheduler, runTaskForTenant } from "./scheduler.js";
 import { resolveTenantFromRequest } from "./tenancy/router.js";
 import { logger } from "./logger.js";
-import { config } from "./config.js";
+import { config, publicHostnameForTenant } from "./config.js";
 import { getVmStatus, createVmSshPty } from "./proxmox.js";
 import { vmOrchestrator } from "./vm-orchestrator.js";
+import { ingressStatusForTenant, ensureTenantIngress } from "./zoraxy.js";
+import { ensureTenantDns, ensureNimbusBaseDns, cloudflareStatus } from "./cloudflare.js";
+import {
+  listSpaceRoutes, writeSpaceRoute, editSpaceRoute, deleteSpaceRoute, ensureSpaceScaffold, restartSpaceOnVm,
+} from "./space.js";
+import { shouldUseVmAgent, runVmAgentChat, getChatBackendPreference } from "./vm-agent-client.js";
+import {
+  listSecrets, upsertSecret, deleteSecret,
+  listAccessTokens, createAccessToken, deleteAccessToken,
+  getChannels, saveChannels, getUxSettings, saveUxSettings,
+  getChannelModels, saveChannelModels, getToolsSettings, saveToolsSettings,
+} from "./workspace-settings.js";
 import { createSkillFile, getSkillByNameOrId, importSkillFromContent, listSkills, scanSkills, setSkillEnabled, buildSkillSystemAppendix } from "./skills.js";
 import { browserClick, browserOpen, browserScreenshot, browserSubmit, createBrowserSession, getBrowserSession, listBrowserSessions } from "./browser.js";
 import { completeOAuth, disconnectOAuth, listOAuthProviders, saveManualToken, startOAuth } from "./oauth.js";
@@ -109,7 +121,8 @@ function tenantId(tc) {
 function vmPublic(vm) {
   if (!vm) return null;
   let metadata = {};
-  try { metadata = vm.metadata ? JSON.parse(vm.metadata) : {}; } catch {}
+  try { metadata = typeof vm.metadata === "string" ? JSON.parse(vm.metadata || "{}") : (vm.metadata || {}); } catch {}
+  const hostname = metadata.public_hostname || publicHostnameForTenant(vm.tenant_id);
   return {
     tenant_id: vm.tenant_id,
     provider: vm.provider,
@@ -125,6 +138,8 @@ function vmPublic(vm) {
     last_error: vm.last_error,
     created_at: vm.created_at,
     updated_at: vm.updated_at,
+    public_hostname: hostname,
+    public_url: `https://${hostname}`,
     metadata,
   };
 }
@@ -230,8 +245,38 @@ async function runChatEngine({ tenantContext, message, chatId, personaId, modelO
 
   const startLen = history.length;
   let error = null;
+  let chatBackend = "local";
   try {
-    await runAgent({ messages: history, system, model, onEvent: forward, tenantContext });
+    const decision = await shouldUseVmAgent(tenantContext);
+    if (decision.use) {
+      chatBackend = "vm";
+      const creds = {
+        openai_api_key: getSettingTenant(tId, "openai_api_key", "") || process.env.OPENAI_API_KEY || "",
+        anthropic_api_key: getSettingTenant(tId, "anthropic_api_key", "") || process.env.ANTHROPIC_API_KEY || "",
+        google_api_key: getSettingTenant(tId, "google_api_key", "") || process.env.GEMINI_API_KEY || "",
+        openrouter_api_key: getSettingTenant(tId, "openrouter_api_key", "") || process.env.OPENROUTER_API_KEY || "",
+      };
+      const vmResult = await runVmAgentChat({
+        tenantContext,
+        messages: history,
+        system,
+        model,
+        onEvent: forward,
+        credentials: creds,
+        baseUrl: decision.ready?.baseUrl,
+      });
+      if (!vmResult.ok && vmResult.fallback) {
+        logger.warn("vm_agent_fallback_local", { tenant: tId, error: vmResult.error });
+        chatBackend = "local";
+        forward({ type: "backend", backend: "local", reason: "vm_fallback", error: vmResult.error });
+        await runAgent({ messages: history, system, model, onEvent: forward, tenantContext });
+      } else if (!vmResult.ok) {
+        throw new Error(vmResult.error || "VM-Agent-Fehler");
+      }
+    } else {
+      forward({ type: "backend", backend: "local", reason: decision.reason || "default" });
+      await runAgent({ messages: history, system, model, onEvent: forward, tenantContext });
+    }
     finishChatRun({ runId, status: "done" });
   } catch (err) {
     error = String(err?.message || err);
@@ -258,13 +303,14 @@ async function runChatEngine({ tenantContext, message, chatId, personaId, modelO
       chat_id: chatId,
       run_id: runId,
       error,
+      backend: chatBackend,
       output_text: text,
       output_json: structured,
       events,
     };
   }
 
-  return { mode: "stream", chat_id: chatId, run_id: runId, events, error };
+  return { mode: "stream", chat_id: chatId, run_id: runId, events, error, backend: chatBackend };
 }
 
 const routes = {
@@ -300,6 +346,7 @@ const routes = {
       hasGoogleKey: s.hasGoogleKey,
       hasCustomKey: s.hasCustomKey,
       customBaseUrl: getSettingTenant(tId, "custom_base_url", ""),
+      chatBackend: getChatBackendPreference(tenantContext),
       integrations: JSON.parse(getSettingTenant(tId, "integrations", "{}")),
     });
   },
@@ -315,8 +362,79 @@ const routes = {
     if (typeof b.customBaseUrl === "string") setting("custom_base_url", b.customBaseUrl.trim());
     if (typeof b.provider === "string" && b.provider.trim()) setting("llm_provider", b.provider.trim());
     if (b.model) setting("model", b.model);
+    if (typeof b.chatBackend === "string" && ["auto", "local", "vm"].includes(b.chatBackend.trim().toLowerCase())) {
+      setting("chat_backend", b.chatBackend.trim().toLowerCase());
+    }
     if (b.integrations) setting("integrations", JSON.stringify(b.integrations));
     return json({ ok: true });
+  },
+
+  // --- Settings: Secrets / Tokens / Channels / UX (zo-kompatibel) ---
+  "GET /api/secrets": (_req, _url, tenantContext) => {
+    return json({ ok: true, secrets: listSecrets(tenantId(tenantContext)) });
+  },
+  "POST /api/secrets": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(upsertSecret(tenantId(tenantContext), b.key, b.value));
+  },
+  "DELETE /api/secrets": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(deleteSecret(tenantId(tenantContext), b.key));
+  },
+  "GET /api/access-tokens": (_req, _url, tenantContext) => {
+    return json({ ok: true, tokens: listAccessTokens(tenantId(tenantContext)) });
+  },
+  "POST /api/access-tokens": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(createAccessToken(tenantId(tenantContext), b.name));
+  },
+  "DELETE /api/access-tokens": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(deleteAccessToken(tenantId(tenantContext), b.id));
+  },
+  "GET /api/channels": (_req, _url, tenantContext) => {
+    return json({ ok: true, channels: getChannels(tenantId(tenantContext)) });
+  },
+  "POST /api/channels": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveChannels(tenantId(tenantContext), b));
+  },
+  "GET /api/ux": (_req, _url, tenantContext) => {
+    return json({ ok: true, ux: getUxSettings(tenantId(tenantContext)) });
+  },
+  "POST /api/ux": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveUxSettings(tenantId(tenantContext), b));
+  },
+  "GET /api/channel-models": (_req, _url, tenantContext) => {
+    return json({ ok: true, models: getChannelModels(tenantId(tenantContext)) });
+  },
+  "POST /api/channel-models": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveChannelModels(tenantId(tenantContext), b.models || b));
+  },
+  "GET /api/tools-settings": (_req, _url, tenantContext) => {
+    return json({ ok: true, tools: getToolsSettings(tenantId(tenantContext)) });
+  },
+  "POST /api/tools-settings": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveToolsSettings(tenantId(tenantContext), b));
+  },
+  /** Soft-Reboot des Workspace-Space (kein Hypervisor) */
+  "POST /api/workspace/reboot": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const result = await restartSpaceOnVm(tId);
+    if (!result.ok) return json({ ok: false, error: result.error || "Neustart fehlgeschlagen." }, 502);
+    setSettingTenant(tId, "last_reboot_at", new Date().toISOString());
+    return json({ ok: true, at: new Date().toISOString() });
+  },
+  "GET /api/workspace/restore-points": (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const last = getSettingTenant(tId, "last_reboot_at", "");
+    return json({
+      ok: true,
+      points: last ? [{ id: "last", label: last, at: last }] : [],
+    });
   },
 
   // --- Sessions ---
@@ -561,9 +679,21 @@ const routes = {
   // --- Files ---
   "GET /api/files": async (req, url, tenantContext) => json(await executeTool("list_files", { path: url.searchParams.get("path") || "." }, tenantContext)),
   "GET /api/file": async (req, url, tenantContext) => json(await executeTool("read_file", { path: url.searchParams.get("path") }, tenantContext)),
+  "GET /api/files/read": async (req, url, tenantContext) => json(await executeTool("read_file", { path: url.searchParams.get("path") }, tenantContext)),
   "POST /api/file": async (req, _url, tenantContext) => {
     const b = await body(req);
     return json(await executeTool("write_file", { path: b.path, content: b.content }, tenantContext));
+  },
+  "POST /api/files/write": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(await executeTool("write_file", { path: b.path, content: b.content }, tenantContext));
+  },
+  "POST /api/files/upload": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(await executeTool("write_file_base64", {
+      path: b.path,
+      content_base64: b.content_base64,
+    }, tenantContext));
   },
 
   // --- Upload (multipart/form-data) ---
@@ -690,6 +820,132 @@ const routes = {
     if (!job || job.tenantId !== tId) return json({ error: "Job not found." }, 404);
     const ok = vmOrchestrator.cancel(b.job_id);
     return json({ ok });
+  },
+
+  // --- Space (dynamisches PaaS) ---
+  "GET /api/space/routes": async (_req, _url, tenantContext) => {
+    const raw = listSpaceRoutes(tenantContext);
+    const routes = (raw.routes || []).map((r) => ({
+      path: r.path,
+      type: r.type,
+      public: r.public !== false,
+      name: r.name || null,
+      updated_at: r.updated_at || null,
+    }));
+    return json({ ok: true, routes });
+  },
+
+  "POST /api/space/routes": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    ensureSpaceScaffold(tenantContext);
+    return json(writeSpaceRoute(tenantContext, b));
+  },
+
+  "PUT /api/space/routes": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(editSpaceRoute(tenantContext, b));
+  },
+
+  "DELETE /api/space/routes": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(deleteSpaceRoute(tenantContext, b.path));
+  },
+
+  "POST /api/space/restart": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const result = await restartSpaceOnVm(tId);
+    if (!result.ok) return json({ ok: false, error: result.error || "Neustart fehlgeschlagen." }, 502);
+    return json({ ok: true });
+  },
+
+  // --- Ingress (Cloudflare DNS + optional Zoraxy) — Control Plane only ---
+  "GET /api/ingress/status": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const vm = getVmInstance(tId);
+    const base = ingressStatusForTenant(tId, vm?.ip_address || "");
+    const wanIp = config.ingress.wanIp || "45.84.197.154";
+    let ports = null;
+    const ip = vm?.ip_address || "";
+    const m = ip.match(/^10\.10\.0\.(\d+)$/);
+    if (m) {
+      const n = Number(m[1]);
+      ports = {
+        wan_ip: wanIp,
+        ssh: { public: 10000 + n, target: `${ip}:22`, url: `ssh://ubuntu@${wanIp}:${10000 + n}` },
+        space: { public: 11000 + n, target: `${ip}:3000`, url: `http://${wanIp}:${11000 + n}` },
+        agent: { public: 12000 + n, target: `${ip}:8100`, url: `http://${wanIp}:${12000 + n}` },
+      };
+    }
+    let metadata = {};
+    try {
+      metadata = typeof vm?.metadata === "string" ? JSON.parse(vm.metadata || "{}") : (vm?.metadata || {});
+    } catch { /* ignore */ }
+    return json({
+      ok: true,
+      ...base,
+      vm_state: vm?.state || null,
+      vm_ip: ip || null,
+      public_url: vm ? `https://${base.hostname}` : null,
+      ports,
+      bridge: "vmbr1",
+      configured: config.ingress.enabled,
+      openwrt_manual: true,
+      zoraxy_manual: true,
+      cloudflare: cloudflareStatus(),
+      metadata,
+    });
+  },
+
+  "POST /api/ingress/ensure": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const vm = getVmInstance(tId);
+    if (!vm?.ip_address) return json({ error: "VM hat noch keine IP." }, 400);
+
+    let dns = null;
+    try {
+      dns = await ensureTenantDns({ tenantId: tId });
+    } catch (err) {
+      dns = { ok: false, error: String(err?.message || err) };
+    }
+
+    // Zoraxy bleibt bewusst optional/manuell (ZORAXY_ENABLED=false → dry-run)
+    const zoraxy = await ensureTenantIngress({
+      tenantId: tId,
+      ip: vm.ip_address,
+      port: config.ingress.spacePort,
+    });
+
+    return json({
+      ok: !!dns?.ok,
+      hostname: publicHostnameForTenant(tId),
+      url: `https://${publicHostnameForTenant(tId)}`,
+      dns,
+      zoraxy,
+    });
+  },
+
+  "POST /api/dns/ensure": async (req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const b = await body(req).catch(() => ({}));
+    const targetTenant = (typeof b.tenant_id === "string" && b.tenant_id.trim())
+      ? b.tenant_id.trim()
+      : tId;
+    if (b.base_only) {
+      const base = await ensureNimbusBaseDns();
+      return json({ ok: true, ...base });
+    }
+    const dns = await ensureTenantDns({ tenantId: targetTenant });
+    return json({ ok: true, ...dns });
+  },
+
+  "GET /api/dns/status": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    return json({
+      ok: true,
+      ...cloudflareStatus(),
+      hostname: publicHostnameForTenant(tId),
+      url: `https://${publicHostnameForTenant(tId)}`,
+    });
   },
 };
 

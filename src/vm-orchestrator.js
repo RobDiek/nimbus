@@ -1,3 +1,5 @@
+import { mkdirSync } from "fs";
+import { join } from "path";
 import { logger } from "./logger.js";
 import {
   getVmInstance,
@@ -9,7 +11,7 @@ import {
   listVmJobs,
   listPendingVmJobs,
 } from "./db.js";
-import { config } from "./config.js";
+import { config, publicHostnameForTenant } from "./config.js";
 import {
   ensureTenantVm,
   startVm,
@@ -17,9 +19,22 @@ import {
   getVmStatus,
   getVmIpBestEffort,
   applyVmBootstrap,
+  deployAgentToVm,
+  waitForVmIp,
 } from "./proxmox.js";
+import { ensureOpenwrtForwards, portsForLanIp } from "./openwrt.js";
+import { deploySpaceToVm, ensureSpaceScaffold } from "./space.js";
+import { ensureTenantDns } from "./cloudflare.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function tenantWorkspace(tenantId) {
+  // Muss mit tenancy/router.js übereinstimmen: workspace/<userId>
+  const base = join(import.meta.dir, "..", "workspace");
+  const root = !tenantId || tenantId === "default" ? base : join(base, tenantId);
+  mkdirSync(root, { recursive: true });
+  return root;
+}
 
 class VmOrchestrator {
   constructor() {
@@ -152,7 +167,9 @@ class VmOrchestrator {
           job.status = "retrying";
           updateVmJob(job.id, { status: job.status, error: job.error, retries: job.retries, updatedAt: job.updatedAt });
           const waitMs = this.baseBackoffMs * Math.pow(2, job.retries - 1);
-          logger.warn("vm_job_retry", { id: job.id, type: job.type, tenant: job.tenantId, retries: job.retries, waitMs, error: job.error });
+          logger.warn("vm_job_retry", {
+            id: job.id, type: job.type, tenant: job.tenantId, retries: job.retries, waitMs, error: job.error,
+          });
           await sleep(waitMs);
           this.queue.push(job);
         } else {
@@ -166,18 +183,100 @@ class VmOrchestrator {
     this.running = false;
   }
 
+  /**
+   * Provisioning-Pipeline (Control Plane only — niemals als Agent-Tool):
+   * 1) Proxmox clone + cloud-init + boot + IP ausgeben
+   * 2) Optional Bootstrap + Agent/Space-Deploy
+   * 3) OpenWRT-DNAT + Cloudflare DNS (<slug>.nimbus.diekerit.com)
+   * Zoraxy-Hostname→Origin: bewusst manuell.
+   */
   async processJob(job) {
     const tenantId = job.tenantId;
 
     if (job.type === "provision") {
       updateVmState(tenantId, "provisioning", null);
       const vmData = await ensureTenantVm({ tenantId, existingVmid: null });
-      upsertVmInstance(tenantId, { ...vmData, state: "bootstrapping", last_error: "" });
+      upsertVmInstance(tenantId, {
+        ...vmData,
+        state: "bootstrapping",
+        last_error: "",
+        metadata: vmData.metadata,
+      });
+
       await applyVmBootstrap({
         ip: vmData.ip_address,
         username: vmData.username || config.proxmox.ciUser || "nimbus",
+        tenantId,
       });
-      upsertVmInstance(tenantId, { state: "ready", last_error: "" });
+
+      upsertVmInstance(tenantId, { state: "deploying_agent", last_error: "" });
+      const agentDeploy = await deployAgentToVm({
+        ip: vmData.ip_address,
+        username: vmData.username || config.proxmox.ciUser || "nimbus",
+      });
+      if (!agentDeploy.ok) {
+        logger.warn("agent_deploy_soft_fail", { tenantId, error: agentDeploy.error || agentDeploy.stderr });
+      }
+
+      upsertVmInstance(tenantId, { state: "deploying_space", last_error: "" });
+      const tenantContext = {
+        userId: tenantId,
+        tenantId,
+        workspaceRoot: tenantWorkspace(tenantId),
+      };
+      ensureSpaceScaffold(tenantContext);
+      const spaceDeploy = await deploySpaceToVm(tenantId, tenantContext);
+      if (!spaceDeploy.ok) {
+        logger.warn("space_deploy_soft_fail", { tenantId, error: spaceDeploy.error || spaceDeploy.stderr });
+      }
+
+      const hostname = publicHostnameForTenant(tenantId);
+      let openwrt = null;
+      if (vmData.ip_address) {
+        try {
+          openwrt = await ensureOpenwrtForwards({ lanIp: vmData.ip_address, slug: tenantId });
+        } catch (err) {
+          logger.warn("openwrt_forward_soft_fail", { tenantId, error: String(err?.message || err) });
+          openwrt = { ok: false, error: String(err?.message || err) };
+        }
+      }
+
+      let dns = null;
+      try {
+        dns = await ensureTenantDns({ tenantId });
+      } catch (err) {
+        logger.warn("cloudflare_dns_soft_fail", { tenantId, error: String(err?.message || err) });
+        dns = { ok: false, error: String(err?.message || err) };
+      }
+
+      const portInfo = portsForLanIp(vmData.ip_address || "");
+      const meta = {
+        ...(typeof vmData.metadata === "object" ? vmData.metadata : {}),
+        public_hostname: hostname,
+        public_url: `https://${hostname}`,
+        ingress: {
+          mode: "openwrt_dnat+cloudflare_dns",
+          note: "Zoraxy Host→Origin bewusst manuell; DNS via Cloudflare auto",
+          target: vmData.ip_address ? `${vmData.ip_address}:${config.ingress.spacePort}` : null,
+          hostname,
+          openwrt,
+          dns,
+          ports: portInfo,
+        },
+        agent_deploy: { ok: !!agentDeploy.ok, files: agentDeploy.files },
+        space_deploy: { ok: !!spaceDeploy.ok, files: spaceDeploy.files },
+      };
+
+      logger.info("provision_ready", {
+        tenantId,
+        vmid: vmData.vmid,
+        ip: vmData.ip_address,
+        hostname,
+        openwrt,
+        dns,
+      });
+
+      upsertVmInstance(tenantId, { state: "ready", last_error: "", metadata: meta });
       return;
     }
 
@@ -187,9 +286,18 @@ class VmOrchestrator {
     if (job.type === "start") {
       await startVm(vm.vmid);
       const status = await getVmStatus(vm.vmid);
+      let ip = await waitForVmIp(vm.vmid, 60000, 3000);
+      if (!ip) ip = (await getVmIpBestEffort(vm.vmid)) || vm.ip_address || "";
       const state = status?.status === "running" ? "ready" : "starting";
-      const ip = await getVmIpBestEffort(vm.vmid);
-      upsertVmInstance(tenantId, { state, ip_address: ip || vm.ip_address || "", last_error: "" });
+      if (ip) {
+        logger.info("vm_started_manual_ingress", {
+          tenantId,
+          ip,
+          hostname: publicHostnameForTenant(tenantId),
+          zoraxy_hint: `${publicHostnameForTenant(tenantId)} → ${ip}:${config.ingress.spacePort}`,
+        });
+      }
+      upsertVmInstance(tenantId, { state, ip_address: ip, last_error: "" });
       return;
     }
 

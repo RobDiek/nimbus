@@ -10,29 +10,44 @@ Terminal, Dateisystem, langlebige Services, Scheduler, Web-Zugriff, Memory und
 Personas steuert. Der Agent *handelt* (führt Befehle aus, schreibt Dateien,
 deployt), statt nur zu antworten.
 
+Architektur-Ziel (siehe `MASTER_PLAN.md`): dedizierte **Proxmox-VMs pro Mandant**,
+in-VM Agent (Python/Pydantic-AI), dynamisches PaaS (`__substrate/space`) und
+Zoraxy-Ingress unter `*.agents.diekerit.com`.
+
 ## Tech-Stack
 
-- **Runtime:** Bun (kein Node) — nutzt `Bun.serve`, `Bun.spawn`, `bun:sqlite`
-- **Keine externen Dependencies** — bewusst dependency-frei gehalten
+- **Control Plane:** Bun (kein Node) — `Bun.serve`, `Bun.spawn`, `bun:sqlite`
+- **Control Plane Dependencies:** bewusst dependency-frei
 - **Frontend:** Vanilla JS + handgeschriebenes CSS (kein Framework, kein Build-Step)
 - **DB:** SQLite (`data/nimbus.db`, WAL-Modus)
-- **LLM:** Anthropic Messages API, BYOK (Key liegt lokal in der DB)
+- **LLM (Control Plane):** Anthropic/OpenAI/Google/Custom, BYOK
+- **Hypervisor:** Proxmox VE (Template-VMID Default **9000**)
+- **Ingress:** Zoraxy → `\<tenant\>.agents.diekerit.com`
+- **In-VM Agent:** Python + Pydantic-AI (`vm-image/agent/`)
+- **In-VM Space:** Bun + Hono (`vm-image/space/`)
 
 ## Projektstruktur
 
 ```
 src/
-  server.js     Bun.serve: REST-API, SSE-Chat, WebSocket-Terminal, statische Auslieferung
-  agent.js      Agent-Loop gegen Anthropic Messages API (Tool-Use-Schleife, max 25 Turns)
-  tools.js      Tool-Definitionen (TOOL_DEFS) + executeTool-Dispatcher
-  services.js   User-Services: Prozess-Management mit Ring-Buffer-Logs
-  scheduler.js  Minütlicher Cron-Matcher, führt Tasks über den Agenten aus
-  db.js         SQLite-Schema, Settings-Helper, Default-Personas
-public/
-  index.html    Landing Page (dunkel, animiert)
-  app.html      Single-Page-Konsole (hell, zo-Style) inkl. SVG-Icon-Sprite
-  css/app.css   Design-System der App
-  js/app.js     Frontend-Logik (Views, Chat-Streaming, Terminal, alle Panels)
+  server.js           Bun.serve: REST-API, SSE-Chat, WebSocket-Terminal, Space/Ingress
+  agent.js            Agent-Loop (Control Plane)
+  tools.js            TOOL_DEFS + executeTool (inkl. Space-Routen)
+  proxmox.js          Proxmox API: clone, cloud-init, bootstrap, agent-deploy
+  vm-orchestrator.js  Provisioning-Pipeline (Phase 1–4)
+  zoraxy.js           Ingress-Adapter (HTTP-API oder Config-Dir)
+  space.js            Space-Routen im Workspace / Deploy auf VM
+  services.js         User-Services
+  scheduler.js        Cron-Matcher
+  db.js               SQLite-Schema
+vm-image/
+  bootstrap.sh        VM-Erstinstallation (nur Orchestrator)
+  agent/              Python Agent Core (in der VM)
+  space/              Hono PaaS-Substrat (in der VM)
+scripts/
+  create_workspace.sh|.js   CLI zum Provisionieren
+public/               Landing + App-Konsole
+MASTER_PLAN.md        Architektur-Roadmap
 ```
 
 ## Starten
@@ -44,6 +59,12 @@ bun run dev                # mit Auto-Reload (--watch)
 
 Läuft auf http://localhost:4000 — `/` Landing, `/app` Konsole.
 Port über `PORT`-Env änderbar.
+
+Workspace provisionieren (Proxmox):
+
+```bash
+PROXMOX_ENABLED=true bun scripts/create_workspace.js <tenant-slug>
+```
 
 ## Architektur-Konventionen
 
@@ -62,7 +83,9 @@ Port über `PORT`-Env änderbar.
 - `run_command` hat vollen Shell-Zugriff (persönlicher Server, wie beim Original).
   Nur mit eigenem Key und auf eigener Maschine betreiben.
 - `delete_path` ist auf den Workspace beschränkt (`src/tools.js`, Pfad-Check).
-- Der API-Key wird **nur** an die Anthropic-API gesendet, sonst nirgends.
+- Der API-Key wird **nur** an die LLM-API gesendet, sonst nirgends.
+- **Orchestrator / Proxmox / Zoraxy sind KEINE Agent-Tools.** Die KI darf die
+  Control Plane nicht manipulieren — alles bleibt in der geklonten User-VM.
 
 ## Beim Arbeiten beachten
 
@@ -71,3 +94,4 @@ Port über `PORT`-Env änderbar.
   (`<symbol id="i-…">`, referenziert via `icon("name")` in `js/app.js`).
 - Kein Build-Step: Änderungen an `public/` wirken sofort nach Reload.
 - `data/` und `workspace/` sind git-ignoriert (Laufzeit-Zustand).
+- Produktname bleibt **Nimbus** (auch wenn intern „DiekerHost“ genannt).

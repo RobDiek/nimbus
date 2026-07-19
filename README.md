@@ -49,6 +49,8 @@ The AI agent can use these tools:
 - `browser_open`, `browser_click`, `browser_submit`, `browser_screenshot` – persistent browser sessions
 - `list_oauth_integrations`, `start_oauth_integration` – OAuth provider discovery/start
 - `deploy_hosting`, `hosting_healthcheck`, `hosting_rollback`, `list_hosting_deployments` – versioned hosting supervisor
+- `list_directory` – alias for `list_files` (zo parity)
+- `write_space_route`, `edit_space_route`, `list_space_routes`, `delete_space_route` – dynamic PaaS / Space routes
 
 ### App Sections
 
@@ -101,27 +103,33 @@ Primary runtime options:
 
 Provider/model preferences are persisted in settings (`/api/settings`) and can fallback to env vars.
 
-Proxmox options are fully environment-variable driven:
+Copy `.env.example` → `.env` (gitignored). Bun loads `.env` automatically.
+
+Proxmox / Ingress options (see `MASTER_PLAN.md` / `docs/PHASE1_INVENTORY.md`):
 
 - `PROXMOX_ENABLED=true|false`
-- `PROXMOX_BASE_URL` (e.g. `https://pve.example.com:8006`)
-- `PROXMOX_TOKEN_ID` (e.g. `nimbus@pve!api-token`)
+- `PROXMOX_BASE_URL` (default: `https://45.84.197.121:8006`)
+- `PROXMOX_TOKEN_ID` (e.g. `root@pam!nimbus`)
 - `PROXMOX_TOKEN_SECRET`
-- `PROXMOX_NODE`
-- `PROXMOX_STORAGE` (default: `local-lvm`)
-- `PROXMOX_BRIDGE` (default: `vmbr0`)
-- `PROXMOX_TEMPLATE_VMID`
-- `PROXMOX_VMID_START` (default: `5000`)
-- `PROXMOX_VM_CORES` (default: `2`)
-- `PROXMOX_VM_MEMORY_MB` (default: `4096`)
-- `PROXMOX_VM_DISK_GB` (default: `32`)
-- `PROXMOX_CI_USER` (default: `nimbus`)
+- `PROXMOX_NODE` (e.g. `DiekDataCenter1`)
+- `PROXMOX_STORAGE` (default: `local`)
+- `PROXMOX_BRIDGE` (default: `vmbr1`)
+- `PROXMOX_TEMPLATE_VMID` (default: `9000`)
+- `PROXMOX_CI_USER` (default: `ubuntu`)
 - `PROXMOX_CI_SSH_PUBLIC_KEY`
-- `PROXMOX_CI_PASSWORD`
-- `PROXMOX_IPCONFIG` (default: `ip=dhcp`)
-- `PROXMOX_NAMESERVER`
-- `PROXMOX_SEARCHDOMAIN`
-- `PROXMOX_SSH_CONNECT_TIMEOUT_SEC` (default: `5`)
+- `PROXMOX_IPCONFIG` (`auto` = next free `10.10.0.200-249`)
+- `OPENWRT_PASS` / `OPENWRT_WAN_IP` for DNAT port forwards
+- `ZORAXY_ENABLED` (optional; Phase 1 still manual DNS/Zoraxy hostname mapping)
+
+Provision a tenant VM from CLI:
+
+```bash
+# On Proxmox host
+OPENWRT_PASS='…' sudo -E bash scripts/host/create_workspace.sh robin
+
+# Or via Control Plane API (with .env configured)
+curl -X POST http://localhost:4000/api/vm/create
+```
 
 ---
 
@@ -129,25 +137,26 @@ Proxmox options are fully environment-variable driven:
 
 ```text
 nimbus/
-  public/
-    index.html          # Landing page
-    app.html            # Main app shell
-    css/app.css         # App styles
-    js/app.js           # Frontend logic
+  public/                 # Landing + app console
   src/
-    server.js           # HTTP server, routes, SSE chat, WebSocket terminal
-    agent.js            # Agent loop + provider adapters
-    tools.js            # Tool implementations + dispatcher
-    db.js               # SQLite setup/schema/migrations/default data + vm_instances
-    proxmox.js          # Proxmox API integration and tenant VM orchestration helpers
-    scheduler.js        # Cron-style task scheduler
-    services.js         # Background service lifecycle/log management
-    tenancy/router.js   # Tenant context resolution from request
-  data/
-    nimbus.db           # SQLite database (auto-created)
-  workspace/            # Agent workspace (auto-created)
-  package.json
-  README.md
+    server.js             # HTTP, SSE chat, WS terminal, Space/Ingress APIs
+    agent.js              # Control-plane agent loop
+    tools.js              # Tools incl. Space routes
+    proxmox.js            # Proxmox clone/cloud-init/bootstrap
+    vm-orchestrator.js    # Provision pipeline (VM → agent → space → ingress)
+    zoraxy.js             # Zoraxy ingress adapter
+    space.js              # Dynamic PaaS route management
+    db.js / scheduler.js / services.js / tenancy/
+  vm-image/
+    bootstrap.sh          # In-VM first boot (orchestrator only)
+    agent/                # Python + Pydantic-AI agent core
+    space/                # Bun + Hono PaaS substrate
+  scripts/
+    create_workspace.sh   # CLI wrapper
+    create_workspace.js   # Provision tenant VM
+  MASTER_PLAN.md          # Architecture roadmap
+  data/                   # SQLite (gitignored)
+  workspace/              # Agent workspaces (gitignored)
 ```
 
 ---

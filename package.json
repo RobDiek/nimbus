@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/server.js",
-    "dev": "bun --watch src/server.js"
+    "dev": "bun --watch src/server.js",
+    "create-workspace": "bun scripts/create_workspace.js"
   }
 }
