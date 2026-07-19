@@ -223,13 +223,21 @@ export const TOOL_DEFS = [
   },
   {
     name: "write_space_route",
-    description: "Legt eine dynamische Space-/PaaS-Route an (api|page|static) unter __substrate/space.",
+    description:
+      "Legt eine dynamische Space-/PaaS-Route an unter __substrate/space. " +
+      "route_type=page schreibt eine React-Page (pages/*.tsx, Tailwind). " +
+      "route_type=api schreibt einen Hono-Handler (api/*.js). " +
+      "route_type=static legt eine Datei unter public/ ab.",
     input_schema: {
       type: "object",
       properties: {
-        path: { type: "string", description: "URL-Pfad, z.B. /api/hello" },
+        path: { type: "string", description: "URL-Pfad, z.B. / oder /api/hello" },
         route_type: { type: "string", description: "api | page | static" },
-        code: { type: "string", description: "Handler-Code oder HTML" },
+        name: { type: "string", description: "Komponenten-/Dateiname (optional, bei page)" },
+        code: {
+          type: "string",
+          description: "React-TSX (page), Hono-Handler (api) oder Dateiinhalt (static)",
+        },
         public: { type: "boolean", description: "Öffentlich erreichbar (Default true)" },
       },
       required: ["path", "code"],

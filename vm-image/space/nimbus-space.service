@@ -1,5 +1,5 @@
 [Unit]
-Description=Nimbus Space (Hono PaaS)
+Description=Nimbus Space (Vite + React + Tailwind 4)
 After=network.target
 
 [Service]
@@ -7,10 +7,12 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/workspace/__substrate/space
 Environment=PORT=3000
+Environment=SPACE_PORT=3000
 Environment=NIMBUS_SPACE_PORT=3000
 Environment=NIMBUS_WORKSPACE=/home/workspace
 Environment=HOME=/home/ubuntu
 Environment=PATH=/home/ubuntu/.bun/bin:/usr/local/bin:/usr/bin:/bin
+# Dev-Modus mit Vite-HMR (Golden Image / Workspace-VMs)
 ExecStart=/home/ubuntu/.bun/bin/bun run /home/workspace/__substrate/space/server.js
 Restart=on-failure
 RestartSec=3

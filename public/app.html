@@ -161,6 +161,14 @@
           <select id="modelSel"></select>
           <input id="modelCustomInput" type="text" class="mono" placeholder="Eigenes Modell eingeben (z. B. gpt-4o-mini oder openai/o3-mini)" style="margin-top:8px; display:none;" />
 
+          <label>Chat-Backend</label>
+          <select id="chatBackendSel">
+            <option value="auto">Auto (VM-Agent wenn bereit, sonst lokal)</option>
+            <option value="vm">Immer In-VM-Agent</option>
+            <option value="local">Immer Control-Plane (lokal)</option>
+          </select>
+          <p class="mut" id="chatBackendHint" style="margin-top:6px">Wenn die Tenant-VM ready ist, laufen Tools in der VM.</p>
+
           <div><button id="saveSettings" class="btn dark">Speichern</button> <span id="settingsMsg" class="mut"></span></div>
         </div>
 

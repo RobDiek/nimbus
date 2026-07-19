@@ -1,4 +1,13 @@
 {
   "version": 1,
-  "routes": []
+  "routes": [
+    {
+      "path": "/",
+      "type": "page",
+      "name": "Hello",
+      "file": "pages/Hello.tsx",
+      "public": true,
+      "updated_at": "2026-07-19T00:00:00.000Z"
+    }
+  ]
 }

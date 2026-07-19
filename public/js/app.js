@@ -247,6 +247,13 @@ async function sendMessage(text) {
         let e; try { e = JSON.parse(line); } catch { continue; }
         typing.remove();
         if (e.type === "session") { state.sessionId = e.session_id; loadRecent(); }
+        else if (e.type === "backend") {
+          const label = e.backend === "vm" ? "In-VM-Agent" : "Lokal";
+          bubble.appendChild(Object.assign(document.createElement("div"), {
+            className: "mut",
+            textContent: `Backend: ${label}`,
+          }));
+        }
         else if (e.type === "text") appendText(bubble, e.text);
         else if (e.type === "tool_use") bubble.appendChild(toolCallEl(e.name, e.input));
         else if (e.type === "tool_result") {
@@ -393,6 +400,9 @@ async function loadSpace() {
   initModelUIFromSettings(s);
   ensureCustomInputAlwaysSane();
 
+  const chatBackendSel = $("#chatBackendSel");
+  if (chatBackendSel && s?.chatBackend) chatBackendSel.value = s.chatBackend;
+
   // NOTE: this file is now missing the old provider/model dropdown logic; keep it minimal.
   // We only ensure the model input is editable and persists.
   loadMemory();
@@ -413,6 +423,7 @@ $("#saveSettings").onclick = async () => {
   const googleApiKey = $("#apiKeyGoogle")?.value || "";
   const customApiKey = $("#apiKeyCustom")?.value || "";
   const customBaseUrl = $("#customBaseUrl")?.value || "";
+  const chatBackend = $("#chatBackendSel")?.value || "auto";
 
   await api.post("/api/settings", {
     provider,
@@ -422,6 +433,7 @@ $("#saveSettings").onclick = async () => {
     googleApiKey,
     customApiKey,
     customBaseUrl,
+    chatBackend,
   });
 
   if ($("#apiKeyAnthropic")) $("#apiKeyAnthropic").value = "";

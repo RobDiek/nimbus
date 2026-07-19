@@ -1,119 +1,264 @@
 /**
- * Nimbus Space — dynamisches PaaS (zo.space-Äquivalent).
+ * Nimbus Space Runtime — Vite + React + Tailwind CSS 4 + Hono.
  *
- * - API-/Page-/Static-Routen aus routes.json + routes/*
- * - Workspace-Assets unter /assets/* aus NIMBUS_WORKSPACE
- * - Health: GET /__health
+ * Vite ist der HTTP-Server (HMR). Hono hängt als Middleware für
+ * /__* und /api/* davor. In Produktion: dist/ + dieselbe API.
  */
 import { Hono } from "hono";
-import { readFileSync, existsSync, statSync } from "fs";
-import { join, extname } from "path";
+import { createServer as createViteServer, build as viteBuild } from "vite";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  unlinkSync,
+} from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 
-const ROOT = import.meta.dir;
-const PORT = Number(process.env.PORT || process.env.NIMBUS_SPACE_PORT || 3000);
-const WORKSPACE = process.env.NIMBUS_WORKSPACE || join(ROOT, "..", "..", "workspace");
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ROOT = __dirname;
+const PORT = Number(process.env.SPACE_PORT || process.env.PORT || process.env.NIMBUS_SPACE_PORT || 3000);
+const IS_PROD =
+  process.env.NODE_ENV === "production" ||
+  process.env.NIMBUS_SPACE_MODE === "prod";
+const DIST = join(ROOT, "dist");
+const ROUTES_FILE = join(ROOT, "routes.json");
+const PAGES_DIR = join(ROOT, "pages");
+const API_DIR = join(ROOT, "api");
 
-const app = new Hono();
+mkdirSync(PAGES_DIR, { recursive: true });
+mkdirSync(API_DIR, { recursive: true });
 
-function loadManifest() {
-  const p = join(ROOT, "routes.json");
-  if (!existsSync(p)) return { version: 1, routes: [] };
+function loadRoutes() {
+  if (!existsSync(ROUTES_FILE)) return { routes: [] };
   try {
-    return JSON.parse(readFileSync(p, "utf8"));
+    return JSON.parse(readFileSync(ROUTES_FILE, "utf8"));
   } catch {
-    return { version: 1, routes: [] };
+    return { routes: [] };
   }
 }
 
-const MIME = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".svg": "image/svg+xml",
-  ".txt": "text/plain; charset=utf-8",
-  ".md": "text/markdown; charset=utf-8",
-};
+function saveRoutes(data) {
+  writeFileSync(ROUTES_FILE, JSON.stringify(data, null, 2));
+}
 
-app.get("/__health", (c) => c.json({
-  ok: true,
-  service: "nimbus-space",
-  workspace: WORKSPACE,
-  routes: loadManifest().routes?.length || 0,
-}));
+function listPageFiles() {
+  if (!existsSync(PAGES_DIR)) return [];
+  return readdirSync(PAGES_DIR)
+    .filter((f) => /\.(jsx|tsx|js|ts)$/.test(f))
+    .map((f) => f.replace(/\.(jsx|tsx|js|ts)$/, ""));
+}
 
-app.get("/__routes", (c) => c.json(loadManifest()));
+function createApiApp() {
+  const app = new Hono();
 
-// Workspace-Dateien als Assets
-app.get("/assets/*", async (c) => {
-  const rel = c.req.path.replace(/^\/assets\/?/, "");
-  if (!rel || rel.includes("..")) return c.text("Forbidden", 403);
-  const full = join(WORKSPACE, rel);
-  if (!existsSync(full) || !statSync(full).isFile()) return c.text("Not found", 404);
-  const ext = extname(full).toLowerCase();
-  const body = readFileSync(full);
-  return new Response(body, {
-    headers: { "content-type": MIME[ext] || "application/octet-stream" },
-  });
-});
+  app.get("/__health", (c) =>
+    c.json({
+      ok: true,
+      service: "nimbus-space",
+      mode: IS_PROD ? "production" : "development",
+      framework: "vite+react+tailwind4",
+      pages: listPageFiles(),
+      routes: loadRoutes().routes.length,
+    }),
+  );
 
-app.all("/*", async (c) => {
-  const path = new URL(c.req.url).pathname.replace(/\/+$/, "") || "/";
-  const manifest = loadManifest();
-  const route = (manifest.routes || []).find((r) => {
-    const rp = r.path.replace(/\/+$/, "") || "/";
-    return rp === path;
+  app.get("/__routes", (c) => {
+    const data = loadRoutes();
+    const pages = listPageFiles();
+    return c.json({
+      routes: data.routes,
+      pages: pages.map((name) => ({
+        name,
+        path: name.toLowerCase() === "hello" ? "/" : `/${name.toLowerCase()}`,
+        type: "page",
+        file: `pages/${name}.tsx`,
+      })),
+    });
   });
 
-  if (!route) {
-    // Fallback: index page
-    if (path === "/") {
-      return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>Nimbus Space</title></head>
-<body style="font-family:system-ui;padding:2rem">
-<h1>Nimbus Space</h1>
-<p>Keine Root-Route definiert. Nutze <code>write_space_route</code>.</p>
-<p><a href="/__routes">/__routes</a> · <a href="/__health">/__health</a></p>
-</body></html>`);
+  app.post("/__routes", async (c) => {
+    const body = await c.req.json();
+    const { path, type = "page", name, content } = body;
+    if (!path || !content) return c.json({ error: "path und content erforderlich" }, 400);
+
+    const data = loadRoutes();
+    const existing = data.routes.findIndex((r) => r.path === path);
+    const entry = {
+      path,
+      type,
+      name: name || path,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (type === "page") {
+      const pageName =
+        (name || path.replace(/^\//, "") || "Index").replace(/[^a-zA-Z0-9_-]/g, "") ||
+        "Page";
+      const file = join(PAGES_DIR, `${pageName}.tsx`);
+      writeFileSync(file, content);
+      entry.file = `pages/${pageName}.tsx`;
+      entry.name = pageName;
+    } else if (type === "api") {
+      const apiName =
+        (name || path.replace(/^\/api\//, "") || "handler").replace(/[^a-zA-Z0-9_-]/g, "") ||
+        "handler";
+      const file = join(API_DIR, `${apiName}.js`);
+      writeFileSync(file, content);
+      entry.file = `api/${apiName}.js`;
+      entry.name = apiName;
+    } else {
+      return c.json({ error: `Unbekannter Typ: ${type}` }, 400);
     }
-    return c.text("Not found", 404);
-  }
 
-  if (route.public === false) {
-    return c.text("Private route", 403);
-  }
+    if (existing >= 0) data.routes[existing] = entry;
+    else data.routes.push(entry);
+    saveRoutes(data);
+    return c.json({ ok: true, route: entry });
+  });
 
-  const file = join(ROOT, route.file);
-  if (!existsSync(file)) return c.text("Route file missing", 500);
+  app.delete("/__routes", async (c) => {
+    const body = await c.req.json();
+    const { path } = body;
+    if (!path) return c.json({ error: "path erforderlich" }, 400);
+    const data = loadRoutes();
+    const route = data.routes.find((r) => r.path === path);
+    if (route?.file) {
+      const full = join(ROOT, route.file);
+      if (existsSync(full)) unlinkSync(full);
+    }
+    data.routes = data.routes.filter((r) => r.path !== path);
+    saveRoutes(data);
+    return c.json({ ok: true });
+  });
 
-  if (route.type === "api") {
+  app.all("/api/*", async (c) => {
+    const pathname = new URL(c.req.url).pathname;
+    const name = pathname.replace(/^\/api\//, "").split("/")[0];
+    const file = join(API_DIR, `${name}.js`);
+    if (!existsSync(file)) return c.json({ error: "API-Route nicht gefunden" }, 404);
     try {
       const mod = await import(`${file}?t=${Date.now()}`);
       const handler = mod.default || mod.handler;
-      if (typeof handler !== "function") return c.json({ error: "API route has no default export" }, 500);
-      return await handler(c);
-    } catch (err) {
-      return c.json({ error: String(err?.message || err) }, 500);
+      if (typeof handler !== "function") {
+        return c.json({ error: "Kein Handler exportiert" }, 500);
+      }
+      return handler(c);
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
     }
+  });
+
+  return app;
+}
+
+async function handleApi(req, res, app) {
+  const host = req.headers.host || `127.0.0.1:${PORT}`;
+  const url = `http://${host}${req.url}`;
+  const headers = new Headers();
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (v != null) headers.set(k, Array.isArray(v) ? v.join(", ") : String(v));
   }
 
-  if (route.type === "static") {
-    const body = readFileSync(file);
-    const ext = extname(file).toLowerCase();
-    return new Response(body, {
-      headers: { "content-type": MIME[ext] || "text/plain; charset=utf-8" },
+  let body;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    body = await new Promise((resolve, reject) => {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => resolve(Buffer.concat(chunks)));
+      req.on("error", reject);
     });
   }
 
-  // page
-  return c.html(readFileSync(file, "utf8"));
-});
+  const response = await app.fetch(
+    new Request(url, { method: req.method, headers, body }),
+  );
+  res.statusCode = response.status;
+  response.headers.forEach((v, k) => res.setHeader(k, v));
+  const buf = Buffer.from(await response.arrayBuffer());
+  res.end(buf);
+}
 
-export default {
-  port: PORT,
-  fetch: app.fetch,
-};
+async function startDev() {
+  const api = createApiApp();
 
-console.log(`[nimbus-space] listening on :${PORT} workspace=${WORKSPACE}`);
+  const vite = await createViteServer({
+    root: ROOT,
+    configFile: join(ROOT, "vite.config.js"),
+    server: {
+      host: "0.0.0.0",
+      port: PORT,
+      strictPort: true,
+    },
+    plugins: [
+      {
+        name: "nimbus-space-api",
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const url = req.url || "";
+            const path = url.split("?")[0];
+            if (path.startsWith("/__") || path.startsWith("/api/")) {
+              try {
+                await handleApi(req, res, api);
+              } catch (e) {
+                res.statusCode = 500;
+                res.end(String(e));
+              }
+              return;
+            }
+            next();
+          });
+        },
+      },
+    ],
+  });
+
+  await vite.listen(PORT);
+  vite.printUrls();
+  console.log(`[nimbus-space] vite+react+tailwind4 on :${PORT}`);
+}
+
+async function startProd() {
+  const api = createApiApp();
+
+  if (!existsSync(join(DIST, "index.html"))) {
+    console.log("[nimbus-space] dist/ fehlt — baue Production-Bundle…");
+    await viteBuild({ root: ROOT, configFile: join(ROOT, "vite.config.js") });
+  }
+
+  const indexHtml = readFileSync(join(DIST, "index.html"), "utf8");
+
+  Bun.serve({
+    port: PORT,
+    hostname: "0.0.0.0",
+    async fetch(req) {
+      const url = new URL(req.url);
+      if (url.pathname.startsWith("/__") || url.pathname.startsWith("/api/")) {
+        return api.fetch(req);
+      }
+      const filePath = join(DIST, url.pathname === "/" ? "index.html" : url.pathname);
+      if (url.pathname !== "/" && existsSync(filePath) && !filePath.endsWith("/")) {
+        const file = Bun.file(filePath);
+        return new Response(file);
+      }
+      return new Response(indexHtml, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    },
+  });
+  console.log(`[nimbus-space] production on :${PORT}`);
+}
+
+if (IS_PROD) {
+  startProd().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+} else {
+  startDev().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

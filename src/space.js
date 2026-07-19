@@ -2,14 +2,17 @@
  * Dynamisches PaaS / Space (Phase 3) — Control-Plane-Seite.
  *
  * Verwaltet Routen unter `<workspace>/__substrate/space/`.
- * Der Hono-Server in der VM (vm-image/space) lädt dieselbe Struktur.
+ * Der Vite+React+Hono-Server in der VM (vm-image/space) lädt dieselbe Struktur.
  *
- * Route-Typen: api | page | static
+ * Route-Typen:
+ *  - page   → pages/{Name}.tsx (React-Komponente, Tailwind)
+ *  - api    → api/{name}.js    (Hono-Handler)
+ *  - static → public/...       (statische Datei)
  */
 import {
   existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync, rmSync,
 } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, basename } from "path";
 import { config } from "./config.js";
 import { getVmInstance } from "./db.js";
 import { execOnVmViaSsh } from "./proxmox.js";
@@ -26,6 +29,10 @@ function manifestPath(tenantContext) {
   return join(spaceRoot(tenantContext), "routes.json");
 }
 
+function bundledSpaceRoot() {
+  return join(import.meta.dir, "..", "vm-image", "space");
+}
+
 function normalizeRoutePath(path) {
   let p = String(path || "").trim();
   if (!p.startsWith("/")) p = `/${p}`;
@@ -34,76 +41,101 @@ function normalizeRoutePath(path) {
   return p;
 }
 
-function routeFileName(routePath, routeType) {
-  // /api/ping + api → routes/api/api__ping.js (keine verschachtelten Pfadsegmente)
-  const safe = (routePath.replace(/^\//, "").replace(/\//g, "__").replace(/[^a-zA-Z0-9._-]/g, "_") || "index");
-  const ext = routeType === "page" ? "html" : routeType === "static" ? "txt" : "js";
-  return join("routes", routeType, `${safe}.${ext}`);
+function pageComponentName(routePath, explicitName) {
+  if (explicitName) {
+    const cleaned = String(explicitName).replace(/[^a-zA-Z0-9_-]/g, "");
+    if (cleaned) return cleaned[0].toUpperCase() + cleaned.slice(1);
+  }
+  const raw = routePath.replace(/^\//, "").replace(/\//g, "_") || "Index";
+  const parts = raw.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  const name = parts.map((p) => p[0].toUpperCase() + p.slice(1)).join("") || "Index";
+  return name;
+}
+
+function wrapAsReactPage(code, componentName) {
+  const src = String(code || "").trim();
+  if (
+    src.includes("export default") ||
+    /export\s+function\s+\w+/.test(src) ||
+    /export\s+const\s+\w+\s*=/.test(src)
+  ) {
+    return src.endsWith("\n") ? src : `${src}\n`;
+  }
+  // Reines JSX / HTML → Default-Export-Komponente
+  const body = src.startsWith("<") ? src : `<div>${src}</div>`;
+  return `export default function ${componentName}() {
+  return (
+    <>
+${body.split("\n").map((l) => `      ${l}`).join("\n")}
+    </>
+  );
+}
+`;
+}
+
+function wrapAsApiHandler(code, routePath) {
+  const src = String(code || "");
+  if (src.includes("export")) return src.endsWith("\n") ? src : `${src}\n`;
+  return `/** Auto-generated Nimbus Space API route: ${routePath} */
+export default async function handler(c) {
+${src.split("\n").map((l) => `  ${l}`).join("\n")}
+}
+`;
+}
+
+/**
+ * Kopiert das Vite/React-Substrat aus vm-image/space (ohne node_modules/dist).
+ */
+function syncBundledScaffold(root) {
+  const bundled = bundledSpaceRoot();
+  if (!existsSync(bundled)) return;
+
+  const skip = new Set(["node_modules", "dist", ".vite"]);
+  function walkCopy(srcDir, destDir) {
+    mkdirSync(destDir, { recursive: true });
+    for (const name of readdirSync(srcDir)) {
+      if (skip.has(name)) continue;
+      const src = join(srcDir, name);
+      const dest = join(destDir, name);
+      const st = statSync(src);
+      if (st.isDirectory()) walkCopy(src, dest);
+      else {
+        // Bestehende User-Pages/API nicht überschreiben, außer Core-Dateien
+        const isCore =
+          name === "server.js" ||
+          name === "package.json" ||
+          name === "vite.config.js" ||
+          name === "index.html" ||
+          name === "nimbus-space.service" ||
+          destDir.includes(`${root}/src`);
+        if (!existsSync(dest) || isCore) {
+          mkdirSync(dirname(dest), { recursive: true });
+          writeFileSync(dest, readFileSync(src));
+        }
+      }
+    }
+  }
+  walkCopy(bundled, root);
 }
 
 export function ensureSpaceScaffold(tenantContext) {
   const root = spaceRoot(tenantContext);
+  mkdirSync(join(root, "pages"), { recursive: true });
+  mkdirSync(join(root, "api"), { recursive: true });
+  mkdirSync(join(root, "public"), { recursive: true });
+  mkdirSync(join(root, "src"), { recursive: true });
+  // Legacy-Ordner (ältere Routen) weiter erlauben
   mkdirSync(join(root, "routes", "api"), { recursive: true });
   mkdirSync(join(root, "routes", "page"), { recursive: true });
   mkdirSync(join(root, "routes", "static"), { recursive: true });
-  mkdirSync(join(root, "public"), { recursive: true });
 
-  const pkgPath = join(root, "package.json");
-  if (!existsSync(pkgPath)) {
-    writeFileSync(pkgPath, JSON.stringify({
-      name: "nimbus-space",
-      private: true,
-      type: "module",
-      scripts: {
-        start: "bun run server.js",
-        dev: "bun --watch server.js",
-      },
-      dependencies: {
-        hono: "^4.7.2",
-      },
-    }, null, 2));
-  }
-
-  const serverPath = join(root, "server.js");
-  if (!existsSync(serverPath)) {
-    // Minimaler Hono-Loader — vollständige Vorlage liegt in vm-image/space
-    writeFileSync(serverPath, readSpaceServerTemplate());
-  }
+  syncBundledScaffold(root);
 
   if (!existsSync(manifestPath(tenantContext))) {
     writeFileSync(manifestPath(tenantContext), JSON.stringify({ version: 1, routes: [] }, null, 2));
   }
 
   return { ok: true, root };
-}
-
-function readSpaceServerTemplate() {
-  const bundled = join(import.meta.dir, "..", "vm-image", "space", "server.js");
-  if (existsSync(bundled)) return readFileSync(bundled, "utf8");
-  return `import { Hono } from "hono";
-import { readFileSync, existsSync } from "fs";
-import { join } from "path";
-const app = new Hono();
-const ROOT = import.meta.dir;
-const PORT = Number(process.env.PORT || 3000);
-const WORKSPACE = process.env.NIMBUS_WORKSPACE || join(ROOT, "..", "..");
-app.get("/__health", (c) => c.json({ ok: true, service: "nimbus-space" }));
-app.get("/*", async (c) => {
-  const manifest = JSON.parse(readFileSync(join(ROOT, "routes.json"), "utf8"));
-  const path = new URL(c.req.url).pathname;
-  const route = (manifest.routes || []).find((r) => r.path === path && r.public !== false);
-  if (!route) return c.text("Not found", 404);
-  const file = join(ROOT, route.file);
-  if (!existsSync(file)) return c.text("Route file missing", 500);
-  if (route.type === "api") {
-    const mod = await import(file + "?t=" + Date.now());
-    return mod.default(c);
-  }
-  return c.html(readFileSync(file, "utf8"));
-});
-export default { port: PORT, fetch: app.fetch };
-console.log("Nimbus Space listening on :" + PORT + " workspace=" + WORKSPACE);
-`;
 }
 
 function loadManifest(tenantContext) {
@@ -121,10 +153,20 @@ function saveManifest(tenantContext, manifest) {
 
 export function listSpaceRoutes(tenantContext) {
   const manifest = loadManifest(tenantContext);
+  const root = spaceRoot(tenantContext);
+  const pagesDir = join(root, "pages");
+  const pageFiles = existsSync(pagesDir)
+    ? readdirSync(pagesDir).filter((f) => /\.(jsx|tsx|js|ts)$/.test(f))
+    : [];
   return {
     ok: true,
-    root: spaceRoot(tenantContext),
+    root,
+    framework: "vite+react+tailwind4",
     routes: manifest.routes || [],
+    pages: pageFiles.map((f) => ({
+      name: basename(f).replace(/\.(jsx|tsx|js|ts)$/, ""),
+      file: `pages/${f}`,
+    })),
   };
 }
 
@@ -138,19 +180,32 @@ export function writeSpaceRoute(tenantContext, input = {}) {
   const isPublic = input.public !== false && input.public !== "false";
 
   ensureSpaceScaffold(tenantContext);
-  const relFile = routeFileName(routePath, routeType);
-  const fullFile = join(spaceRoot(tenantContext), relFile);
-  mkdirSync(dirname(fullFile), { recursive: true });
+  const root = spaceRoot(tenantContext);
 
+  let relFile;
   let content = code;
-  if (routeType === "api" && !code.includes("export")) {
-    content = `/** Auto-generated Nimbus Space API route: ${routePath} */
-export default async function handler(c) {
-${code.split("\n").map((l) => `  ${l}`).join("\n")}
-}
-`;
+
+  if (routeType === "page") {
+    const componentName = pageComponentName(routePath, input.name);
+    relFile = `pages/${componentName}.tsx`;
+    content = wrapAsReactPage(code, componentName);
+  } else if (routeType === "api") {
+    const apiName =
+      (input.name || routePath.replace(/^\/api\//, "") || "handler")
+        .replace(/[^a-zA-Z0-9_-]/g, "") || "handler";
+    relFile = `api/${apiName}.js`;
+    content = wrapAsApiHandler(code, routePath);
+  } else {
+    // static
+    const safe =
+      routePath.replace(/^\//, "").replace(/\//g, "__").replace(/[^a-zA-Z0-9._-]/g, "_") ||
+      "index.txt";
+    relFile = `public/${safe}`;
+    content = code;
   }
 
+  const fullFile = join(root, relFile);
+  mkdirSync(dirname(fullFile), { recursive: true });
   writeFileSync(fullFile, content);
 
   const manifest = loadManifest(tenantContext);
@@ -160,6 +215,7 @@ ${code.split("\n").map((l) => `  ${l}`).join("\n")}
     path: routePath,
     type: routeType,
     file: relFile.replace(/\\/g, "/"),
+    name: routeType === "page" ? pageComponentName(routePath, input.name) : (input.name || routePath),
     public: isPublic,
     updated_at: new Date().toISOString(),
   };
@@ -183,12 +239,20 @@ export function editSpaceRoute(tenantContext, input = {}) {
   const edit = input.code_edit ?? input.codeEdit ?? input.code;
   if (edit === undefined || edit === null) return { error: "code_edit fehlt." };
 
-  // Einfache Strategie: vollständiger Ersatz wenn code_edit ein kompletter Inhalt ist,
-  // sonst Append mit Marker.
   const existing = readFileSync(fullFile, "utf8");
-  const next = String(edit).includes("export default") || String(edit).includes("<")
-    ? String(edit)
-    : `${existing}\n\n// --- edit ${new Date().toISOString()} ---\n${edit}\n`;
+  let next;
+  if (route.type === "page") {
+    const name = route.name || pageComponentName(routePath);
+    next =
+      String(edit).includes("export default") || String(edit).includes("export function")
+        ? String(edit)
+        : wrapAsReactPage(String(edit), name);
+  } else {
+    next =
+      String(edit).includes("export default") || String(edit).includes("<")
+        ? String(edit)
+        : `${existing}\n\n// --- edit ${new Date().toISOString()} ---\n${edit}\n`;
+  }
 
   writeFileSync(fullFile, next);
   route.updated_at = new Date().toISOString();
@@ -222,32 +286,31 @@ export async function deploySpaceToVm(tenantId, tenantContext) {
   const remoteRoot = join(config.space.workspaceMount, config.space.substratePath).replace(/\\/g, "/");
   const user = vm.username || config.proxmox.ciUser || "nimbus";
 
-  // Tar über SSH streamen (kein externes rsync nötig)
   const script = `
 set -euo pipefail
 mkdir -p ${JSON.stringify(remoteRoot)}
 mkdir -p ${JSON.stringify(config.space.workspaceMount)}
 cd ${JSON.stringify(remoteRoot)}
-if command -v bun >/dev/null 2>&1; then
-  bun install || true
-else
+export PATH="$HOME/.bun/bin:$PATH"
+if ! command -v bun >/dev/null 2>&1; then
   curl -fsSL https://bun.sh/install | bash
   export BUN_INSTALL="$HOME/.bun"
   export PATH="$BUN_INSTALL/bin:$PATH"
-  bun install || true
 fi
-# Space-Service als systemd user unit oder nohup
-pkill -f 'nimbus-space|__substrate/space/server.js' 2>/dev/null || true
-nohup bun run server.js > /tmp/nimbus-space.log 2>&1 &
-echo $! > /tmp/nimbus-space.pid
-sleep 1
+bun install
+sudo systemctl restart nimbus-space 2>/dev/null || {
+  pkill -f 'nimbus-space|__substrate/space/server.js' 2>/dev/null || true
+  nohup bun run server.js > /tmp/nimbus-space.log 2>&1 &
+  echo $! > /tmp/nimbus-space.pid
+}
+sleep 2
 curl -sf http://127.0.0.1:${config.ingress.spacePort}/__health || true
 `;
 
-  // Erst Dateien übertragen
   const list = [];
   function walk(dir, base = "") {
     for (const name of readdirSync(dir)) {
+      if (name === "node_modules" || name === "dist" || name === ".vite") continue;
       const full = join(dir, name);
       const rel = base ? `${base}/${name}` : name;
       if (statSync(full).isDirectory()) walk(full, rel);

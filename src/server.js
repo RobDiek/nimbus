@@ -43,6 +43,7 @@ import { ingressStatusForTenant, ensureTenantIngress } from "./zoraxy.js";
 import {
   listSpaceRoutes, writeSpaceRoute, editSpaceRoute, deleteSpaceRoute, ensureSpaceScaffold,
 } from "./space.js";
+import { shouldUseVmAgent, runVmAgentChat, getChatBackendPreference } from "./vm-agent-client.js";
 import { createSkillFile, getSkillByNameOrId, importSkillFromContent, listSkills, scanSkills, setSkillEnabled, buildSkillSystemAppendix } from "./skills.js";
 import { browserClick, browserOpen, browserScreenshot, browserSubmit, createBrowserSession, getBrowserSession, listBrowserSessions } from "./browser.js";
 import { completeOAuth, disconnectOAuth, listOAuthProviders, saveManualToken, startOAuth } from "./oauth.js";
@@ -237,8 +238,38 @@ async function runChatEngine({ tenantContext, message, chatId, personaId, modelO
 
   const startLen = history.length;
   let error = null;
+  let chatBackend = "local";
   try {
-    await runAgent({ messages: history, system, model, onEvent: forward, tenantContext });
+    const decision = await shouldUseVmAgent(tenantContext);
+    if (decision.use) {
+      chatBackend = "vm";
+      const creds = {
+        openai_api_key: getSettingTenant(tId, "openai_api_key", "") || process.env.OPENAI_API_KEY || "",
+        anthropic_api_key: getSettingTenant(tId, "anthropic_api_key", "") || process.env.ANTHROPIC_API_KEY || "",
+        google_api_key: getSettingTenant(tId, "google_api_key", "") || process.env.GEMINI_API_KEY || "",
+        openrouter_api_key: getSettingTenant(tId, "openrouter_api_key", "") || process.env.OPENROUTER_API_KEY || "",
+      };
+      const vmResult = await runVmAgentChat({
+        tenantContext,
+        messages: history,
+        system,
+        model,
+        onEvent: forward,
+        credentials: creds,
+        baseUrl: decision.ready?.baseUrl,
+      });
+      if (!vmResult.ok && vmResult.fallback) {
+        logger.warn("vm_agent_fallback_local", { tenant: tId, error: vmResult.error });
+        chatBackend = "local";
+        forward({ type: "backend", backend: "local", reason: "vm_fallback", error: vmResult.error });
+        await runAgent({ messages: history, system, model, onEvent: forward, tenantContext });
+      } else if (!vmResult.ok) {
+        throw new Error(vmResult.error || "VM-Agent-Fehler");
+      }
+    } else {
+      forward({ type: "backend", backend: "local", reason: decision.reason || "default" });
+      await runAgent({ messages: history, system, model, onEvent: forward, tenantContext });
+    }
     finishChatRun({ runId, status: "done" });
   } catch (err) {
     error = String(err?.message || err);
@@ -265,13 +296,14 @@ async function runChatEngine({ tenantContext, message, chatId, personaId, modelO
       chat_id: chatId,
       run_id: runId,
       error,
+      backend: chatBackend,
       output_text: text,
       output_json: structured,
       events,
     };
   }
 
-  return { mode: "stream", chat_id: chatId, run_id: runId, events, error };
+  return { mode: "stream", chat_id: chatId, run_id: runId, events, error, backend: chatBackend };
 }
 
 const routes = {
@@ -307,6 +339,7 @@ const routes = {
       hasGoogleKey: s.hasGoogleKey,
       hasCustomKey: s.hasCustomKey,
       customBaseUrl: getSettingTenant(tId, "custom_base_url", ""),
+      chatBackend: getChatBackendPreference(tenantContext),
       integrations: JSON.parse(getSettingTenant(tId, "integrations", "{}")),
     });
   },
@@ -322,6 +355,9 @@ const routes = {
     if (typeof b.customBaseUrl === "string") setting("custom_base_url", b.customBaseUrl.trim());
     if (typeof b.provider === "string" && b.provider.trim()) setting("llm_provider", b.provider.trim());
     if (b.model) setting("model", b.model);
+    if (typeof b.chatBackend === "string" && ["auto", "local", "vm"].includes(b.chatBackend.trim().toLowerCase())) {
+      setting("chat_backend", b.chatBackend.trim().toLowerCase());
+    }
     if (b.integrations) setting("integrations", JSON.stringify(b.integrations));
     return json({ ok: true });
   },

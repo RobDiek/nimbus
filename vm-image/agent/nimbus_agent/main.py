@@ -1,7 +1,14 @@
 """
 Nimbus in-VM Agent HTTP-Service.
 
-POST /v1/ask  { "prompt": "...", "model": "optional" }
+POST /v1/ask  {
+  "prompt": "...",
+  "model": "optional",
+  "system": "optional override",
+  "messages": [{"role":"user|assistant","content":"..."}],
+  "credentials": {"openai_api_key": "...", ...},
+  "max_turns": 12
+}
 GET  /health
 """
 
@@ -16,13 +23,28 @@ from pydantic import BaseModel, Field
 from .prompts import load_system_prompt
 from . import tools
 
-app = FastAPI(title="Nimbus VM Agent", version="1.0.0")
+app = FastAPI(title="Nimbus VM Agent", version="1.1.0")
 PORT = int(os.environ.get("NIMBUS_AGENT_PORT", "8100"))
 
 
+class ChatMessage(BaseModel):
+    role: str = "user"
+    content: str = ""
+
+
+class AskCredentials(BaseModel):
+    openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    google_api_key: str | None = None
+    openrouter_api_key: str | None = None
+
+
 class AskRequest(BaseModel):
-    prompt: str
+    prompt: str = ""
     model: str | None = None
+    system: str | None = None
+    messages: list[ChatMessage] = Field(default_factory=list)
+    credentials: AskCredentials | None = None
     max_turns: int = Field(default=12, ge=1, le=40)
 
 
@@ -43,15 +65,58 @@ def _tool_registry():
     }
 
 
-async def run_with_pydantic_ai(prompt: str, model: str | None) -> AskResponse:
+def _apply_credentials(creds: AskCredentials | None) -> dict[str, str]:
+    """Setzt Provider-Keys temporär in die Prozess-Umgebung (Request-Scope)."""
+    previous: dict[str, str | None] = {}
+    if not creds:
+        return previous
+
+    mapping = {
+        "OPENAI_API_KEY": creds.openai_api_key,
+        "ANTHROPIC_API_KEY": creds.anthropic_api_key,
+        "GEMINI_API_KEY": creds.google_api_key,
+        "GOOGLE_API_KEY": creds.google_api_key,
+        "OPENROUTER_API_KEY": creds.openrouter_api_key,
+    }
+    for key, value in mapping.items():
+        if not value:
+            continue
+        previous[key] = os.environ.get(key)
+        os.environ[key] = value
+    return previous
+
+
+def _restore_credentials(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _compose_prompt(req: AskRequest) -> str:
+    if req.messages:
+        parts: list[str] = []
+        for m in req.messages:
+            role = (m.role or "user").upper()
+            text = (m.content or "").strip()
+            if text:
+                parts.append(f"{role}: {text}")
+        if parts:
+            return "\n\n".join(parts)
+    return (req.prompt or "").strip()
+
+
+async def run_with_pydantic_ai(req: AskRequest) -> AskResponse:
     """Bevorzugter Pfad: Pydantic-AI Agent mit Kern-Tools."""
     try:
         from pydantic_ai import Agent
     except ImportError:
-        return await run_tool_loop_fallback(prompt)
+        return await run_tool_loop_fallback(req.prompt or _compose_prompt(req))
 
-    system = load_system_prompt(os.environ.get("NIMBUS_AGENT_SOUL_PATH"))
-    model_name = model or os.environ.get("NIMBUS_AGENT_MODEL", "openai:gpt-4o-mini")
+    soul = load_system_prompt(os.environ.get("NIMBUS_AGENT_SOUL_PATH"))
+    system = (req.system or "").strip() or soul
+    model_name = req.model or os.environ.get("NIMBUS_AGENT_MODEL", "openai:gpt-4o-mini")
 
     agent = Agent(model_name, system_prompt=system)
 
@@ -74,6 +139,10 @@ async def run_with_pydantic_ai(prompt: str, model: str | None) -> AskResponse:
     @agent.tool_plain
     async def agent_browser(url: str, action: str = "snapshot", selector: str | None = None) -> dict:
         return await tools.agent_browser(url, action, selector)
+
+    prompt = _compose_prompt(req)
+    if not prompt:
+        return AskResponse(ok=False, output="Leerer Prompt.", tool_trace=[], mode="error")
 
     result = await agent.run(prompt)
     text = result.data if hasattr(result, "data") else str(result)
@@ -106,7 +175,6 @@ async def run_tool_loop_fallback(prompt: str) -> AskResponse:
         trace.append({"tool": "list_directory", "input": {"path": path}, "result": out})
         return AskResponse(ok=True, output=str(out), tool_trace=trace)
 
-    # Default: Workspace listen + Hinweis
     listing = await tools.list_directory(".")
     trace.append({"tool": "list_directory", "result": listing})
     msg = (
@@ -123,6 +191,7 @@ async def health():
     return {
         "ok": True,
         "service": "nimbus-agent",
+        "version": "1.1.0",
         "workspace": str(tools.WORKSPACE),
         "tools": list(_tool_registry().keys()),
     }
@@ -130,13 +199,18 @@ async def health():
 
 @app.post("/v1/ask", response_model=AskResponse)
 async def ask(req: AskRequest):
+    previous = _apply_credentials(req.credentials)
     try:
-        return await run_with_pydantic_ai(req.prompt, req.model)
-    except Exception as err:  # noqa: BLE001 — operativer Fallback
-        fallback = await run_tool_loop_fallback(req.prompt)
-        fallback.output = f"[pydantic-ai error: {err}]\n\n{fallback.output}"
-        fallback.mode = "fallback-after-error"
-        return fallback
+        try:
+            return await run_with_pydantic_ai(req)
+        except Exception as err:  # noqa: BLE001 — operativer Fallback
+            prompt = _compose_prompt(req)
+            fallback = await run_tool_loop_fallback(prompt)
+            fallback.output = f"[pydantic-ai error: {err}]\n\n{fallback.output}"
+            fallback.mode = "fallback-after-error"
+            return fallback
+    finally:
+        _restore_credentials(previous)
 
 
 def main():
