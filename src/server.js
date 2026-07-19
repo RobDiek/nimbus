@@ -36,9 +36,13 @@ import { services } from "./services.js";
 import { startScheduler, runTaskForTenant } from "./scheduler.js";
 import { resolveTenantFromRequest } from "./tenancy/router.js";
 import { logger } from "./logger.js";
-import { config } from "./config.js";
+import { config, publicHostnameForTenant } from "./config.js";
 import { getVmStatus, createVmSshPty } from "./proxmox.js";
 import { vmOrchestrator } from "./vm-orchestrator.js";
+import { ingressStatusForTenant, ensureTenantIngress } from "./zoraxy.js";
+import {
+  listSpaceRoutes, writeSpaceRoute, editSpaceRoute, deleteSpaceRoute, ensureSpaceScaffold,
+} from "./space.js";
 import { createSkillFile, getSkillByNameOrId, importSkillFromContent, listSkills, scanSkills, setSkillEnabled, buildSkillSystemAppendix } from "./skills.js";
 import { browserClick, browserOpen, browserScreenshot, browserSubmit, createBrowserSession, getBrowserSession, listBrowserSessions } from "./browser.js";
 import { completeOAuth, disconnectOAuth, listOAuthProviders, saveManualToken, startOAuth } from "./oauth.js";
@@ -109,7 +113,8 @@ function tenantId(tc) {
 function vmPublic(vm) {
   if (!vm) return null;
   let metadata = {};
-  try { metadata = vm.metadata ? JSON.parse(vm.metadata) : {}; } catch {}
+  try { metadata = typeof vm.metadata === "string" ? JSON.parse(vm.metadata || "{}") : (vm.metadata || {}); } catch {}
+  const hostname = metadata.public_hostname || publicHostnameForTenant(vm.tenant_id);
   return {
     tenant_id: vm.tenant_id,
     provider: vm.provider,
@@ -125,6 +130,8 @@ function vmPublic(vm) {
     last_error: vm.last_error,
     created_at: vm.created_at,
     updated_at: vm.updated_at,
+    public_hostname: hostname,
+    public_url: `https://${hostname}`,
     metadata,
   };
 }
@@ -690,6 +697,51 @@ const routes = {
     if (!job || job.tenantId !== tId) return json({ error: "Job not found." }, 404);
     const ok = vmOrchestrator.cancel(b.job_id);
     return json({ ok });
+  },
+
+  // --- Space (dynamisches PaaS) ---
+  "GET /api/space/routes": async (_req, _url, tenantContext) => {
+    return json(listSpaceRoutes(tenantContext));
+  },
+
+  "POST /api/space/routes": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    ensureSpaceScaffold(tenantContext);
+    return json(writeSpaceRoute(tenantContext, b));
+  },
+
+  "PUT /api/space/routes": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(editSpaceRoute(tenantContext, b));
+  },
+
+  "DELETE /api/space/routes": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(deleteSpaceRoute(tenantContext, b.path));
+  },
+
+  // --- Ingress (Zoraxy) — Control Plane only ---
+  "GET /api/ingress/status": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const vm = getVmInstance(tId);
+    return json({
+      ok: true,
+      ...ingressStatusForTenant(tId, vm?.ip_address || ""),
+      vm_state: vm?.state || null,
+      configured: config.ingress.enabled,
+    });
+  },
+
+  "POST /api/ingress/ensure": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const vm = getVmInstance(tId);
+    if (!vm?.ip_address) return json({ error: "VM hat noch keine IP." }, 400);
+    const result = await ensureTenantIngress({
+      tenantId: tId,
+      ip: vm.ip_address,
+      port: config.ingress.spacePort,
+    });
+    return json({ ok: true, ...result, url: `https://${publicHostnameForTenant(tId)}` });
   },
 };
 

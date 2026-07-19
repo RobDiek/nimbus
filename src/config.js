@@ -3,6 +3,22 @@ const toNumber = (value, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const toBool = (value, fallback = false) => {
+  if (value === undefined || value === null || value === "") return fallback;
+  return String(value).toLowerCase() === "true" || value === "1";
+};
+
+/** Sanitized tenant slug for hostnames / DNS labels. */
+export function sanitizeTenantSlug(tenantId) {
+  const t = (tenantId || "default").toString().trim().toLowerCase();
+  return t.replace(/[^a-z0-9-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "default";
+}
+
+export function publicHostnameForTenant(tenantId, domain = config.ingress.baseDomain) {
+  const slug = sanitizeTenantSlug(tenantId);
+  return `${slug}.${domain}`;
+}
+
 export const config = {
   port: toNumber(process.env.PORT, 4000),
   defaultProvider: "anthropic",
@@ -11,14 +27,16 @@ export const config = {
   toolTimeoutMs: toNumber(process.env.TOOL_TIMEOUT_MS, 120000),
 
   proxmox: {
-    enabled: String(process.env.PROXMOX_ENABLED || "false").toLowerCase() === "true",
-    baseUrl: (process.env.PROXMOX_BASE_URL || "").trim(), // e.g. https://pve.example.com:8006
-    tokenId: (process.env.PROXMOX_TOKEN_ID || "").trim(), // e.g. nimbus@pve!api-token
+    enabled: toBool(process.env.PROXMOX_ENABLED, false),
+    // Default: DiekerIT Proxmox host (überschreibbar per Env)
+    baseUrl: (process.env.PROXMOX_BASE_URL || "https://45.84.197.121:8006").trim(),
+    tokenId: (process.env.PROXMOX_TOKEN_ID || "").trim(),
     tokenSecret: (process.env.PROXMOX_TOKEN_SECRET || "").trim(),
     node: (process.env.PROXMOX_NODE || "").trim(),
     storage: (process.env.PROXMOX_STORAGE || "local-lvm").trim(),
     bridge: (process.env.PROXMOX_BRIDGE || "vmbr0").trim(),
-    templateVmid: toNumber(process.env.PROXMOX_TEMPLATE_VMID, 0),
+    // Golden Image / Ubuntu Template
+    templateVmid: toNumber(process.env.PROXMOX_TEMPLATE_VMID, 9000),
     vmidStart: toNumber(process.env.PROXMOX_VMID_START, 5000),
     cpuCores: toNumber(process.env.PROXMOX_VM_CORES, 2),
     memoryMb: toNumber(process.env.PROXMOX_VM_MEMORY_MB, 4096),
@@ -26,9 +44,41 @@ export const config = {
     ciUser: (process.env.PROXMOX_CI_USER || "nimbus").trim(),
     ciSshPublicKey: (process.env.PROXMOX_CI_SSH_PUBLIC_KEY || "").trim(),
     ciPassword: (process.env.PROXMOX_CI_PASSWORD || "").trim(),
-    ipConfig: (process.env.PROXMOX_IPCONFIG || "ip=dhcp").trim(), // cloud-init ipconfig0 value
-    nameserver: (process.env.PROXMOX_NAMESERVER || "").trim(),
-    searchdomain: (process.env.PROXMOX_SEARCHDOMAIN || "").trim(),
+    ipConfig: (process.env.PROXMOX_IPCONFIG || "ip=dhcp").trim(),
+    nameserver: (process.env.PROXMOX_NAMESERVER || "1.1.1.1").trim(),
+    searchdomain: (process.env.PROXMOX_SEARCHDOMAIN || "agents.diekerit.com").trim(),
     sshConnectTimeoutSec: toNumber(process.env.PROXMOX_SSH_CONNECT_TIMEOUT_SEC, 5),
+    // Wartezeit bis qemu-guest-agent eine IP liefert
+    ipWaitTimeoutMs: toNumber(process.env.PROXMOX_IP_WAIT_TIMEOUT_MS, 180000),
+    ipWaitIntervalMs: toNumber(process.env.PROXMOX_IP_WAIT_INTERVAL_MS, 4000),
+  },
+
+  ingress: {
+    enabled: toBool(process.env.ZORAXY_ENABLED, false),
+    baseDomain: (process.env.NIMBUS_BASE_DOMAIN || "agents.diekerit.com").trim(),
+    spacePort: toNumber(process.env.NIMBUS_SPACE_PORT, 3000),
+    agentPort: toNumber(process.env.NIMBUS_AGENT_PORT, 8100),
+    zoraxy: {
+      baseUrl: (process.env.ZORAXY_BASE_URL || "").trim(),
+      // Session-Cookie oder API-Token (je nach Zoraxy-Setup)
+      apiToken: (process.env.ZORAXY_API_TOKEN || "").trim(),
+      username: (process.env.ZORAXY_USERNAME || "").trim(),
+      password: (process.env.ZORAXY_PASSWORD || "").trim(),
+      // Optional: Config-Dateien statt HTTP-API schreiben
+      configDir: (process.env.ZORAXY_CONFIG_DIR || "").trim(),
+      addPath: (process.env.ZORAXY_ADD_PATH || "/api/proxy/add").trim(),
+      useTls: toBool(process.env.ZORAXY_USE_TLS, true),
+    },
+  },
+
+  space: {
+    // Relativer Pfad im Tenant-Workspace / in der VM
+    substratePath: (process.env.NIMBUS_SPACE_SUBSTRATE || "__substrate/space").trim(),
+    workspaceMount: (process.env.NIMBUS_VM_WORKSPACE || "/home/workspace").trim(),
+  },
+
+  agentVm: {
+    installPath: (process.env.NIMBUS_AGENT_INSTALL_PATH || "/opt/nimbus-agent").trim(),
+    soulPath: (process.env.NIMBUS_AGENT_SOUL_PATH || "/opt/nimbus-agent/SOUL.md").trim(),
   },
 };

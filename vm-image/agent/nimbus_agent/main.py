@@ -1,0 +1,148 @@
+"""
+Nimbus in-VM Agent HTTP-Service.
+
+POST /v1/ask  { "prompt": "...", "model": "optional" }
+GET  /health
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+
+from .prompts import load_system_prompt
+from . import tools
+
+app = FastAPI(title="Nimbus VM Agent", version="1.0.0")
+PORT = int(os.environ.get("NIMBUS_AGENT_PORT", "8100"))
+
+
+class AskRequest(BaseModel):
+    prompt: str
+    model: str | None = None
+    max_turns: int = Field(default=12, ge=1, le=40)
+
+
+class AskResponse(BaseModel):
+    ok: bool
+    output: str
+    tool_trace: list[dict[str, Any]] = []
+    mode: str = "tools"
+
+
+def _tool_registry():
+    return {
+        "bash": tools.bash,
+        "read_file": tools.read_file,
+        "write_file": tools.write_file,
+        "list_directory": tools.list_directory,
+        "agent_browser": tools.agent_browser,
+    }
+
+
+async def run_with_pydantic_ai(prompt: str, model: str | None) -> AskResponse:
+    """Bevorzugter Pfad: Pydantic-AI Agent mit Kern-Tools."""
+    try:
+        from pydantic_ai import Agent
+    except ImportError:
+        return await run_tool_loop_fallback(prompt)
+
+    system = load_system_prompt(os.environ.get("NIMBUS_AGENT_SOUL_PATH"))
+    model_name = model or os.environ.get("NIMBUS_AGENT_MODEL", "openai:gpt-4o-mini")
+
+    agent = Agent(model_name, system_prompt=system)
+
+    @agent.tool_plain
+    async def bash(command: str, cwd: str | None = None) -> dict:
+        return await tools.bash(command, cwd)
+
+    @agent.tool_plain
+    async def read_file(path: str) -> dict:
+        return await tools.read_file(path)
+
+    @agent.tool_plain
+    async def write_file(path: str, content: str) -> dict:
+        return await tools.write_file(path, content)
+
+    @agent.tool_plain
+    async def list_directory(path: str = ".") -> dict:
+        return await tools.list_directory(path)
+
+    @agent.tool_plain
+    async def agent_browser(url: str, action: str = "snapshot", selector: str | None = None) -> dict:
+        return await tools.agent_browser(url, action, selector)
+
+    result = await agent.run(prompt)
+    text = result.data if hasattr(result, "data") else str(result)
+    return AskResponse(ok=True, output=str(text), tool_trace=[], mode="pydantic-ai")
+
+
+async def run_tool_loop_fallback(prompt: str) -> AskResponse:
+    """
+    Minimaler Fallback ohne LLM-Key:
+    erkennt einfache Intent-Patterns und führt Tools aus.
+    """
+    trace: list[dict[str, Any]] = []
+    lower = prompt.lower().strip()
+
+    if lower.startswith("bash:") or lower.startswith("! "):
+        cmd = prompt.split(":", 1)[-1].strip() if ":" in prompt[:8] else prompt[2:].strip()
+        out = await tools.bash(cmd)
+        trace.append({"tool": "bash", "input": {"command": cmd}, "result": out})
+        return AskResponse(ok=True, output=out.get("stdout") or out.get("stderr") or "", tool_trace=trace)
+
+    if lower.startswith("read:"):
+        path = prompt.split(":", 1)[1].strip()
+        out = await tools.read_file(path)
+        trace.append({"tool": "read_file", "input": {"path": path}, "result": out})
+        return AskResponse(ok=True, output=out.get("content") or out.get("error") or "", tool_trace=trace)
+
+    if lower.startswith("ls:") or lower.startswith("list:"):
+        path = prompt.split(":", 1)[1].strip() or "."
+        out = await tools.list_directory(path)
+        trace.append({"tool": "list_directory", "input": {"path": path}, "result": out})
+        return AskResponse(ok=True, output=str(out), tool_trace=trace)
+
+    # Default: Workspace listen + Hinweis
+    listing = await tools.list_directory(".")
+    trace.append({"tool": "list_directory", "result": listing})
+    msg = (
+        "Kein LLM-Key konfiguriert (Fallback-Modus).\n"
+        "Nutze: `bash: <cmd>`, `read: <path>`, `list: <path>` "
+        "oder setze OPENAI_API_KEY / NIMBUS_AGENT_MODEL für Pydantic-AI.\n"
+        f"Workspace: {listing.get('path')}"
+    )
+    return AskResponse(ok=True, output=msg, tool_trace=trace, mode="fallback")
+
+
+@app.get("/health")
+async def health():
+    return {
+        "ok": True,
+        "service": "nimbus-agent",
+        "workspace": str(tools.WORKSPACE),
+        "tools": list(_tool_registry().keys()),
+    }
+
+
+@app.post("/v1/ask", response_model=AskResponse)
+async def ask(req: AskRequest):
+    try:
+        return await run_with_pydantic_ai(req.prompt, req.model)
+    except Exception as err:  # noqa: BLE001 — operativer Fallback
+        fallback = await run_tool_loop_fallback(req.prompt)
+        fallback.output = f"[pydantic-ai error: {err}]\n\n{fallback.output}"
+        fallback.mode = "fallback-after-error"
+        return fallback
+
+
+def main():
+    import uvicorn
+    uvicorn.run("nimbus_agent.main:app", host="0.0.0.0", port=PORT, reload=False)
+
+
+if __name__ == "__main__":
+    main()

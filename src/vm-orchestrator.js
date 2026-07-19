@@ -1,3 +1,5 @@
+import { mkdirSync } from "fs";
+import { join } from "path";
 import { logger } from "./logger.js";
 import {
   getVmInstance,
@@ -9,7 +11,7 @@ import {
   listVmJobs,
   listPendingVmJobs,
 } from "./db.js";
-import { config } from "./config.js";
+import { config, publicHostnameForTenant } from "./config.js";
 import {
   ensureTenantVm,
   startVm,
@@ -17,9 +19,21 @@ import {
   getVmStatus,
   getVmIpBestEffort,
   applyVmBootstrap,
+  deployAgentToVm,
+  waitForVmIp,
 } from "./proxmox.js";
+import { ensureTenantIngress, removeTenantIngress } from "./zoraxy.js";
+import { deploySpaceToVm, ensureSpaceScaffold } from "./space.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function tenantWorkspace(tenantId) {
+  // Muss mit tenancy/router.js übereinstimmen: workspace/<userId>
+  const base = join(import.meta.dir, "..", "workspace");
+  const root = !tenantId || tenantId === "default" ? base : join(base, tenantId);
+  mkdirSync(root, { recursive: true });
+  return root;
+}
 
 class VmOrchestrator {
   constructor() {
@@ -152,7 +166,9 @@ class VmOrchestrator {
           job.status = "retrying";
           updateVmJob(job.id, { status: job.status, error: job.error, retries: job.retries, updatedAt: job.updatedAt });
           const waitMs = this.baseBackoffMs * Math.pow(2, job.retries - 1);
-          logger.warn("vm_job_retry", { id: job.id, type: job.type, tenant: job.tenantId, retries: job.retries, waitMs, error: job.error });
+          logger.warn("vm_job_retry", {
+            id: job.id, type: job.type, tenant: job.tenantId, retries: job.retries, waitMs, error: job.error,
+          });
           await sleep(waitMs);
           this.queue.push(job);
         } else {
@@ -166,18 +182,76 @@ class VmOrchestrator {
     this.running = false;
   }
 
+  /**
+   * Provisioning-Pipeline (Control Plane only — niemals als Agent-Tool):
+   * 1) Proxmox clone + cloud-init + boot
+   * 2) Bootstrap + Agent Core
+   * 3) Space-Substrat
+   * 4) Zoraxy Ingress
+   */
   async processJob(job) {
     const tenantId = job.tenantId;
 
     if (job.type === "provision") {
       updateVmState(tenantId, "provisioning", null);
       const vmData = await ensureTenantVm({ tenantId, existingVmid: null });
-      upsertVmInstance(tenantId, { ...vmData, state: "bootstrapping", last_error: "" });
+      upsertVmInstance(tenantId, {
+        ...vmData,
+        state: "bootstrapping",
+        last_error: "",
+        metadata: vmData.metadata,
+      });
+
       await applyVmBootstrap({
         ip: vmData.ip_address,
         username: vmData.username || config.proxmox.ciUser || "nimbus",
+        tenantId,
       });
-      upsertVmInstance(tenantId, { state: "ready", last_error: "" });
+
+      upsertVmInstance(tenantId, { state: "deploying_agent", last_error: "" });
+      const agentDeploy = await deployAgentToVm({
+        ip: vmData.ip_address,
+        username: vmData.username || config.proxmox.ciUser || "nimbus",
+      });
+      if (!agentDeploy.ok) {
+        logger.warn("agent_deploy_soft_fail", { tenantId, error: agentDeploy.error || agentDeploy.stderr });
+      }
+
+      upsertVmInstance(tenantId, { state: "deploying_space", last_error: "" });
+      const tenantContext = {
+        userId: tenantId,
+        tenantId,
+        workspaceRoot: tenantWorkspace(tenantId),
+      };
+      ensureSpaceScaffold(tenantContext);
+      const spaceDeploy = await deploySpaceToVm(tenantId, tenantContext);
+      if (!spaceDeploy.ok) {
+        logger.warn("space_deploy_soft_fail", { tenantId, error: spaceDeploy.error || spaceDeploy.stderr });
+      }
+
+      upsertVmInstance(tenantId, { state: "configuring_ingress", last_error: "" });
+      let ingress = null;
+      try {
+        ingress = await ensureTenantIngress({
+          tenantId,
+          ip: vmData.ip_address,
+          port: config.ingress.spacePort,
+        });
+      } catch (err) {
+        logger.warn("ingress_soft_fail", { tenantId, error: String(err?.message || err) });
+        ingress = { ok: false, error: String(err?.message || err) };
+      }
+
+      const meta = {
+        ...(typeof vmData.metadata === "object" ? vmData.metadata : {}),
+        public_hostname: publicHostnameForTenant(tenantId),
+        public_url: `https://${publicHostnameForTenant(tenantId)}`,
+        ingress,
+        agent_deploy: { ok: !!agentDeploy.ok, files: agentDeploy.files },
+        space_deploy: { ok: !!spaceDeploy.ok, files: spaceDeploy.files },
+      };
+
+      upsertVmInstance(tenantId, { state: "ready", last_error: "", metadata: meta });
       return;
     }
 
@@ -187,14 +261,23 @@ class VmOrchestrator {
     if (job.type === "start") {
       await startVm(vm.vmid);
       const status = await getVmStatus(vm.vmid);
+      let ip = await waitForVmIp(vm.vmid, 60000, 3000);
+      if (!ip) ip = (await getVmIpBestEffort(vm.vmid)) || vm.ip_address || "";
       const state = status?.status === "running" ? "ready" : "starting";
-      const ip = await getVmIpBestEffort(vm.vmid);
-      upsertVmInstance(tenantId, { state, ip_address: ip || vm.ip_address || "", last_error: "" });
+      if (ip) {
+        try {
+          await ensureTenantIngress({ tenantId, ip, port: config.ingress.spacePort });
+        } catch (err) {
+          logger.warn("ingress_rebind_failed", { tenantId, error: String(err?.message || err) });
+        }
+      }
+      upsertVmInstance(tenantId, { state, ip_address: ip, last_error: "" });
       return;
     }
 
     if (job.type === "stop") {
       await stopVm(vm.vmid);
+      try { await removeTenantIngress({ tenantId }); } catch { /* best effort */ }
       upsertVmInstance(tenantId, { state: "stopped", last_error: "" });
       return;
     }

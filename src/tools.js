@@ -7,6 +7,9 @@ import { listSkills, scanSkills, isToolAllowedBySkill } from "./skills.js";
 import { browserOpen, browserClick, browserSubmit, browserScreenshot } from "./browser.js";
 import { listOAuthProviders, startOAuth } from "./oauth.js";
 import { deployService, healthCheck, rollbackDeployment, listDeployments } from "./hosting.js";
+import {
+  writeSpaceRoute, editSpaceRoute, listSpaceRoutes, deleteSpaceRoute, ensureSpaceScaffold,
+} from "./space.js";
 import { join, resolve, relative } from "path";
 import {
   readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, rmSync, existsSync,
@@ -209,9 +212,54 @@ export const TOOL_DEFS = [
     input_schema: { type: "object", properties: { path: { type: "string" } } },
   },
   {
+    name: "list_directory",
+    description: "Alias für list_files (zo.computer-Parität).",
+    input_schema: { type: "object", properties: { path: { type: "string" } } },
+  },
+  {
     name: "delete_path",
     description: "Löscht Datei oder Verzeichnis (nur innerhalb des Workspace).",
     input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+  {
+    name: "write_space_route",
+    description: "Legt eine dynamische Space-/PaaS-Route an (api|page|static) unter __substrate/space.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "URL-Pfad, z.B. /api/hello" },
+        route_type: { type: "string", description: "api | page | static" },
+        code: { type: "string", description: "Handler-Code oder HTML" },
+        public: { type: "boolean", description: "Öffentlich erreichbar (Default true)" },
+      },
+      required: ["path", "code"],
+    },
+  },
+  {
+    name: "edit_space_route",
+    description: "Bearbeitet den Code einer bestehenden Space-Route.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        code_edit: { type: "string" },
+      },
+      required: ["path", "code_edit"],
+    },
+  },
+  {
+    name: "list_space_routes",
+    description: "Listet alle Space-Routen des aktuellen Workspaces.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "delete_space_route",
+    description: "Löscht eine Space-Route.",
+    input_schema: {
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: ["path"],
+    },
   },
   {
     name: "web_search",
@@ -404,11 +452,14 @@ function enforceScopeOrThrow(skill, scope, detail = "") {
 }
 
 function toolScopeRequirements(name) {
-  const filesRead = new Set(["read_file", "list_files"]);
+  const filesRead = new Set(["read_file", "list_files", "list_directory"]);
   const filesWrite = new Set(["write_file", "write_file_base64", "delete_path"]);
   const networkTools = new Set(["web_search", "web_fetch", "run_command"]);
   const browserTools = new Set(["browser_open", "browser_click", "browser_submit", "browser_screenshot"]);
-  const hostingTools = new Set(["deploy_hosting", "hosting_healthcheck", "hosting_rollback", "list_hosting_deployments"]);
+  const hostingTools = new Set([
+    "deploy_hosting", "hosting_healthcheck", "hosting_rollback", "list_hosting_deployments",
+    "write_space_route", "edit_space_route", "list_space_routes", "delete_space_route",
+  ]);
   const oauthTools = new Set(["list_oauth_integrations", "start_oauth_integration"]);
 
   if (filesRead.has(name)) return ["files:read"];
@@ -442,6 +493,9 @@ const TOOL_REQUIREMENTS = {
   deploy_hosting: ["name", "command"],
   hosting_healthcheck: ["name"],
   hosting_rollback: ["name"],
+  write_space_route: ["path", "code"],
+  edit_space_route: ["path", "code_edit"],
+  delete_space_route: ["path"],
 };
 
 export async function executeTool(name, input, tenantContext) {
@@ -470,8 +524,24 @@ export async function executeTool(name, input, tenantContext) {
       case "read_file": result = readFile(safeInput.path, tenantContext); break;
       case "write_file": result = writeFile(safeInput.path, safeInput.content, tenantContext); break;
       case "write_file_base64": result = writeFileBase64(safeInput.path, safeInput.content_base64, tenantContext); break;
-      case "list_files": result = listFiles(safeInput.path, tenantContext); break;
+      case "list_files":
+      case "list_directory":
+        result = listFiles(safeInput.path, tenantContext);
+        break;
       case "delete_path": result = deletePath(safeInput.path, tenantContext); break;
+      case "write_space_route":
+        ensureSpaceScaffold(tenantContext);
+        result = writeSpaceRoute(tenantContext, safeInput);
+        break;
+      case "edit_space_route":
+        result = editSpaceRoute(tenantContext, safeInput);
+        break;
+      case "list_space_routes":
+        result = listSpaceRoutes(tenantContext);
+        break;
+      case "delete_space_route":
+        result = deleteSpaceRoute(tenantContext, safeInput.path);
+        break;
       case "web_search": result = await webSearch(safeInput.query); break;
       case "web_fetch": result = await webFetch(safeInput.url); break;
       case "remember": result = remember(safeInput.content, safeInput.tags, tenantContext); break;
