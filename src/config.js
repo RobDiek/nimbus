@@ -47,7 +47,7 @@ export const config = {
     // auto = nächste freie 10.10.0.200-249
     ipConfig: (process.env.PROXMOX_IPCONFIG || "auto").trim(),
     nameserver: (process.env.PROXMOX_NAMESERVER || "1.1.1.1").trim(),
-    searchdomain: (process.env.PROXMOX_SEARCHDOMAIN || "agents.diekerit.com").trim(),
+    searchdomain: (process.env.PROXMOX_SEARCHDOMAIN || "nimbus.diekerit.com").trim(),
     sshConnectTimeoutSec: toNumber(process.env.PROXMOX_SSH_CONNECT_TIMEOUT_SEC, 5),
     // Wartezeit bis qemu-guest-agent eine IP liefert
     ipWaitTimeoutMs: toNumber(process.env.PROXMOX_IP_WAIT_TIMEOUT_MS, 180000),
@@ -60,7 +60,8 @@ export const config = {
 
   ingress: {
     enabled: toBool(process.env.ZORAXY_ENABLED, false),
-    baseDomain: (process.env.NIMBUS_BASE_DOMAIN || "agents.diekerit.com").trim(),
+    // Standard-Domain für Agent-VMs: <slug>.nimbus.diekerit.com
+    baseDomain: (process.env.NIMBUS_BASE_DOMAIN || "nimbus.diekerit.com").trim(),
     spacePort: toNumber(process.env.NIMBUS_SPACE_PORT, 3000),
     agentPort: toNumber(process.env.NIMBUS_AGENT_PORT, 8100),
     // OpenWRT WAN — Portforwards statt direkter Public-IP auf VMs
@@ -70,6 +71,13 @@ export const config = {
       lanGateway: (process.env.NIMBUS_LAN_GW || "10.10.0.1").trim(),
       // Passwort nur per Env — niemals committen
       password: (process.env.OPENWRT_PASS || "").trim(),
+    },
+    cloudflare: {
+      apiToken: (process.env.CLOUDFLARE_API_TOKEN || "").trim(),
+      zoneId: (process.env.CLOUDFLARE_ZONE_ID || "").trim(),
+      zoneName: (process.env.CLOUDFLARE_ZONE_NAME || "diekerit.com").trim(),
+      // DNS-only (false): nötig für Non-Standard-Ports / OpenWRT-DNAT
+      proxied: toBool(process.env.CLOUDFLARE_PROXIED, false),
     },
     zoraxy: {
       baseUrl: (process.env.ZORAXY_BASE_URL || "").trim(),

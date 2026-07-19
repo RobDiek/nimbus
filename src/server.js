@@ -40,6 +40,7 @@ import { config, publicHostnameForTenant } from "./config.js";
 import { getVmStatus, createVmSshPty } from "./proxmox.js";
 import { vmOrchestrator } from "./vm-orchestrator.js";
 import { ingressStatusForTenant, ensureTenantIngress } from "./zoraxy.js";
+import { ensureTenantDns, ensureNimbusBaseDns, cloudflareStatus } from "./cloudflare.js";
 import {
   listSpaceRoutes, writeSpaceRoute, editSpaceRoute, deleteSpaceRoute, ensureSpaceScaffold,
 } from "./space.js";
@@ -756,7 +757,7 @@ const routes = {
     return json(deleteSpaceRoute(tenantContext, b.path));
   },
 
-  // --- Ingress (Zoraxy) — Control Plane only ---
+  // --- Ingress (Cloudflare DNS + optional Zoraxy) — Control Plane only ---
   "GET /api/ingress/status": async (_req, _url, tenantContext) => {
     const tId = tenantId(tenantContext);
     const vm = getVmInstance(tId);
@@ -788,6 +789,8 @@ const routes = {
       bridge: "vmbr1",
       configured: config.ingress.enabled,
       openwrt_manual: true,
+      zoraxy_manual: true,
+      cloudflare: cloudflareStatus(),
       metadata,
     });
   },
@@ -796,12 +799,52 @@ const routes = {
     const tId = tenantId(tenantContext);
     const vm = getVmInstance(tId);
     if (!vm?.ip_address) return json({ error: "VM hat noch keine IP." }, 400);
-    const result = await ensureTenantIngress({
+
+    let dns = null;
+    try {
+      dns = await ensureTenantDns({ tenantId: tId });
+    } catch (err) {
+      dns = { ok: false, error: String(err?.message || err) };
+    }
+
+    // Zoraxy bleibt bewusst optional/manuell (ZORAXY_ENABLED=false → dry-run)
+    const zoraxy = await ensureTenantIngress({
       tenantId: tId,
       ip: vm.ip_address,
       port: config.ingress.spacePort,
     });
-    return json({ ok: true, ...result, url: `https://${publicHostnameForTenant(tId)}` });
+
+    return json({
+      ok: !!dns?.ok,
+      hostname: publicHostnameForTenant(tId),
+      url: `https://${publicHostnameForTenant(tId)}`,
+      dns,
+      zoraxy,
+    });
+  },
+
+  "POST /api/dns/ensure": async (req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const b = await body(req).catch(() => ({}));
+    const targetTenant = (typeof b.tenant_id === "string" && b.tenant_id.trim())
+      ? b.tenant_id.trim()
+      : tId;
+    if (b.base_only) {
+      const base = await ensureNimbusBaseDns();
+      return json({ ok: true, ...base });
+    }
+    const dns = await ensureTenantDns({ tenantId: targetTenant });
+    return json({ ok: true, ...dns });
+  },
+
+  "GET /api/dns/status": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    return json({
+      ok: true,
+      ...cloudflareStatus(),
+      hostname: publicHostnameForTenant(tId),
+      url: `https://${publicHostnameForTenant(tId)}`,
+    });
   },
 };
 

@@ -17,8 +17,8 @@ mit Root-Rechten sicher gekapselt bleibt.
 | Schicht | Technologie |
 |---|---|
 | Hypervisor | Proxmox VE (`PROXMOX_BASE_URL`, Default-Host `45.84.197.121`) |
-| DNS | Cloudflare (`*.agents.diekerit.com`) |
-| Ingress | Zoraxy Reverse Proxy (Wildcard-SSL + dynamische Routes) |
+| DNS | Cloudflare (`*.nimbus.diekerit.com`) |
+| Ingress | OpenWRT-DNAT + Cloudflare-DNS; Zoraxy Host→Origin **manuell** |
 | VM-Template | Ubuntu Golden Image, Cloud-Init, Template-VMID **9000** |
 | Control Plane | Bun (`src/`), Proxmox-/Zoraxy-Orchestrierung |
 | Agent Core (in der VM) | Python + Pydantic-AI (`vm-image/agent/`) |
@@ -47,9 +47,9 @@ mit Root-Rechten sicher gekapselt bleibt.
 - Fallback auf lokalen Control-Plane-Agent bei Timeout/Fehler
 
 ### Phase 4 — Ingress & Netzwerk
-- DNS: Cloudflare Wildcard `*.agents.diekerit.com` → Public IP
-- **Phase 1:** Zoraxy-Routing **manuell** (Orchestrator gibt nur IP/FQDN aus)
-- Später optional: Zoraxy-API-Automation (`src/zoraxy.js`)
+- DNS: Cloudflare Automapping `<slug>.nimbus.diekerit.com` → WAN-IP (`src/cloudflare.js`)
+- OpenWRT-DNAT für SSH/Space/Agent-Ports
+- **Zoraxy Host→Origin bewusst manuell** (Orchestrator liefert Hostname + Port-Hinweis)
 
 ## 4. Design-Prinzipien
 

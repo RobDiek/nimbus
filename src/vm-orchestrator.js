@@ -24,6 +24,7 @@ import {
 } from "./proxmox.js";
 import { ensureOpenwrtForwards, portsForLanIp } from "./openwrt.js";
 import { deploySpaceToVm, ensureSpaceScaffold } from "./space.js";
+import { ensureTenantDns } from "./cloudflare.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -186,7 +187,8 @@ class VmOrchestrator {
    * Provisioning-Pipeline (Control Plane only — niemals als Agent-Tool):
    * 1) Proxmox clone + cloud-init + boot + IP ausgeben
    * 2) Optional Bootstrap + Agent/Space-Deploy
-   * Zoraxy-Ingress: Phase 1 manuell (IP wird nur geloggt/gespeichert).
+   * 3) OpenWRT-DNAT + Cloudflare DNS (<slug>.nimbus.diekerit.com)
+   * Zoraxy-Hostname→Origin: bewusst manuell.
    */
   async processJob(job) {
     const tenantId = job.tenantId;
@@ -239,17 +241,26 @@ class VmOrchestrator {
         }
       }
 
+      let dns = null;
+      try {
+        dns = await ensureTenantDns({ tenantId });
+      } catch (err) {
+        logger.warn("cloudflare_dns_soft_fail", { tenantId, error: String(err?.message || err) });
+        dns = { ok: false, error: String(err?.message || err) };
+      }
+
       const portInfo = portsForLanIp(vmData.ip_address || "");
       const meta = {
         ...(typeof vmData.metadata === "object" ? vmData.metadata : {}),
         public_hostname: hostname,
         public_url: `https://${hostname}`,
         ingress: {
-          mode: "openwrt_dnat",
-          note: "Zoraxy optional/manuell auf WAN-Port mappen",
+          mode: "openwrt_dnat+cloudflare_dns",
+          note: "Zoraxy Host→Origin bewusst manuell; DNS via Cloudflare auto",
           target: vmData.ip_address ? `${vmData.ip_address}:${config.ingress.spacePort}` : null,
           hostname,
           openwrt,
+          dns,
           ports: portInfo,
         },
         agent_deploy: { ok: !!agentDeploy.ok, files: agentDeploy.files },
@@ -262,6 +273,7 @@ class VmOrchestrator {
         ip: vmData.ip_address,
         hostname,
         openwrt,
+        dns,
       });
 
       upsertVmInstance(tenantId, { state: "ready", last_error: "", metadata: meta });

@@ -583,7 +583,8 @@ function formatVmStatus(vm, ingress, configured) {
     lines.push(`WAN ${p.wan_ip}: SSH :${p.ssh.public}  Space :${p.space.public}  Agent :${p.agent.public}`);
     lines.push(`Space-URL (Portforward): ${p.space.url}`);
   } else if (ingress?.hostname) {
-    lines.push(`Ingress-Host: ${ingress.hostname} (Zoraxy manuell)`);
+    lines.push(`Hostname: ${ingress.hostname}`);
+    lines.push(`DNS: Cloudflare auto → ${ingress.cloudflare?.wanIp || "WAN"} (Zoraxy Host→Origin manuell)`);
   }
   if (vm.last_error) lines.push(`error: ${vm.last_error}`);
   return lines.join("\n");
