@@ -302,11 +302,48 @@
       </div>
     </section>
 
-    <!-- HOSTING (Services) -->
+    <!-- HOSTING (Services + Space PaaS) -->
     <section class="view" data-view="hosting">
       <div class="page">
         <h1 class="page-title">Hosting</h1>
-        <p class="page-sub">Versionierte Deployments mit Public URLs, HTTPS-Metadaten, Healthchecks und Rollback.</p>
+        <p class="page-sub">Services, Space-Routen (zo.space) und Workspace-VM hinter OpenWRT.</p>
+
+        <h2 class="sec-title">Workspace-VM</h2>
+        <div class="card form-card" id="vmPanelHosting">
+          <div class="row-form" style="align-items:center;flex-wrap:wrap">
+            <button id="vmCreateBtnH" class="btn dark">VM erstellen</button>
+            <button id="vmStartBtnH" class="btn">Start</button>
+            <button id="vmStopBtnH" class="btn">Stop</button>
+            <button id="vmRefreshBtnH" class="btn">Aktualisieren</button>
+          </div>
+          <pre id="vmStatusBox" class="logs" style="min-height:72px;margin:0">VM-Status wird geladen …</pre>
+        </div>
+
+        <h2 class="sec-title">Space-Routen (PaaS)</h2>
+        <p class="page-sub" style="margin-top:-6px">Dynamische API-/Page-Routen unter <span class="mono">__substrate/space</span>.</p>
+        <div class="card form-card">
+          <div class="row-form" style="flex-wrap:wrap">
+            <input id="spacePath" class="mono" placeholder="/api/hello" style="max-width:180px" />
+            <select id="spaceType" style="max-width:120px">
+              <option value="api">api</option>
+              <option value="page">page</option>
+              <option value="static">static</option>
+            </select>
+            <label class="mut" style="display:flex;align-items:center;gap:6px;margin:0">
+              <input type="checkbox" id="spacePublic" checked /> öffentlich
+            </label>
+          </div>
+          <label>Code / HTML</label>
+          <textarea id="spaceCode" class="mono" rows="6" placeholder="return c.json({ ok: true, hello: 'nimbus' });"></textarea>
+          <div class="row-form">
+            <button id="spaceSaveBtn" class="btn dark">Route speichern</button>
+            <button id="spaceRefreshBtn" class="btn">Liste aktualisieren</button>
+            <span id="spaceMsg" class="mut"></span>
+          </div>
+        </div>
+        <div id="spaceRouteList" class="cardlist"></div>
+
+        <h2 class="sec-title">Services</h2>
         <div class="card form-card row-form">
           <input id="svcName" placeholder="Name (z. B. web)" style="max-width:180px" />
           <input id="svcCmd" placeholder="Befehl (z. B. python3 -m http.server 8080)" class="mono" />
@@ -318,7 +355,6 @@
         <pre id="svcLogs" class="logs card"></pre>
       </div>
     </section>
-
     <!-- TERMINAL -->
     <section class="view" data-view="terminal">
       <div class="term-wrap">
@@ -337,6 +373,7 @@
               <button id="vmRefreshBtn" class="btn">Status aktualisieren</button>
               <span id="vmQuickStatus" class="mut mono">kein VM zugewiesen</span>
             </div>
+            <pre id="vmStatusBoxTerm" class="logs" style="margin-top:8px;min-height:48px;display:none"></pre>
             <div class="row-form" style="align-items:center;margin-top:8px">
               <label class="mut" style="min-width:120px">VM Jobs</label>
               <select id="vmJobSel" class="mono" style="min-width:280px;max-width:420px"></select>

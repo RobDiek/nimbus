@@ -4,6 +4,8 @@ const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const api = {
   async get(p) { return (await fetch(p)).json(); },
   async post(p, b) { return (await fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}) })).json(); },
+  async put(p, b) { return (await fetch(p, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}) })).json(); },
+  async del(p, b) { return (await fetch(p, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(b || {}) })).json(); },
 };
 const esc = (s) => String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const icon = (name, cls = "ic") => `<svg class="${cls}"><use href="#i-${name}"/></svg>`;
@@ -65,12 +67,12 @@ document.addEventListener("click", (e) => {
 function onViewOpen(v) {
   if (v === "space") loadSpace();
   if (v === "files") loadFiles(".");
-  if (v === "hosting") loadHosting();
+  if (v === "hosting") { loadHosting(); loadVmPanel(); loadSpaceRoutes(); }
   if (v === "automations") loadTasks();
   if (v === "skills") { loadSkills(); loadPersonas(); }
   if (v === "integrations") loadIntegrations();
   if (v === "browser") loadBrowserSessions();
-  if (v === "terminal") initTerminal();
+  if (v === "terminal") { initTerminal(); loadVmPanel(); loadVmJobs(); loadTermSessions(); }
   if (v === "start") $("#input").focus();
 }
 
@@ -549,6 +551,167 @@ $("#svcStart").onclick = async () => {
   $("#svcName").value = ""; $("#svcCmd").value = ""; $("#svcPort").value = "";
   loadHosting();
 };
+
+/* ============ Workspace-VM + Ingress ============ */
+function formatVmStatus(vm, ingress, configured) {
+  if (!vm) {
+    return configured === false
+      ? "Proxmox nicht konfiguriert (PROXMOX_ENABLED=false).\nCLI: scripts/host/create_workspace.sh"
+      : "Keine VM für diesen Tenant.\n„VM erstellen“ startet die Provisionierung.";
+  }
+  const lines = [
+    `state=${vm.state || "?"}  vmid=${vm.vmid ?? "—"}  node=${vm.node || "—"}`,
+    `ip=${vm.ip_address || "—"}  user=${vm.username || "ubuntu"}  bridge=vmbr1`,
+  ];
+  if (vm.public_hostname || vm.public_url) {
+    lines.push(`fqdn=${vm.public_hostname || "—"}  url=${vm.public_url || "—"}`);
+  }
+  if (ingress?.ports) {
+    const p = ingress.ports;
+    lines.push(`WAN ${p.wan_ip}: SSH :${p.ssh.public}  Space :${p.space.public}  Agent :${p.agent.public}`);
+    lines.push(`Space-URL (Portforward): ${p.space.url}`);
+  } else if (ingress?.hostname) {
+    lines.push(`Ingress-Host: ${ingress.hostname} (Zoraxy manuell)`);
+  }
+  if (vm.last_error) lines.push(`error: ${vm.last_error}`);
+  return lines.join("\n");
+}
+
+async function loadVmPanel() {
+  const [st, ingress] = await Promise.all([
+    api.get("/api/vm/status"),
+    api.get("/api/ingress/status"),
+  ]);
+  const vm = st.vm;
+  const text = formatVmStatus(vm, ingress, st.configured);
+  const box = $("#vmStatusBox");
+  const boxT = $("#vmStatusBoxTerm");
+  const quick = $("#vmQuickStatus");
+  if (box) box.textContent = text;
+  if (boxT) {
+    boxT.style.display = "";
+    boxT.textContent = text;
+  }
+  if (quick) {
+    quick.textContent = vm
+      ? `${vm.state || "?"} · ${vm.ip_address || "keine IP"} · vmid ${vm.vmid ?? "—"}`
+      : (st.configured === false ? "Proxmox aus" : "kein VM zugewiesen");
+  }
+}
+
+async function loadVmJobs() {
+  const sel = $("#vmJobSel");
+  if (!sel) return;
+  const { jobs } = await api.get("/api/vm/jobs");
+  sel.innerHTML = (jobs || []).map((j) =>
+    `<option value="${esc(j.id)}">${esc(j.status)} · ${esc(j.type)} · ${esc(j.id)}</option>`
+  ).join("") || `<option value="">keine Jobs</option>`;
+}
+
+async function loadTermSessions() {
+  const sel = $("#termSessionSel");
+  if (!sel) return;
+  const { sessions } = await api.get("/api/vm/terminal/sessions");
+  sel.innerHTML = (sessions || []).map((s) =>
+    `<option value="${esc(s.id)}">${esc(s.status)} · ${esc(s.mode || "local")} · ${esc(s.id)}</option>`
+  ).join("") || `<option value="">keine Sessions</option>`;
+}
+
+async function vmAction(action) {
+  const map = { create: "/api/vm/create", start: "/api/vm/start", stop: "/api/vm/stop" };
+  const path = map[action];
+  if (!path) return;
+  const r = await api.post(path, {});
+  if (r.error) alert(r.error);
+  await loadVmPanel();
+  await loadVmJobs();
+}
+
+function wireVmButtons() {
+  const pairs = [
+    ["vmCreateBtn", "create"], ["vmCreateBtnH", "create"],
+    ["vmStartBtn", "start"], ["vmStartBtnH", "start"],
+    ["vmStopBtn", "stop"], ["vmStopBtnH", "stop"],
+  ];
+  pairs.forEach(([id, action]) => {
+    const el = $("#" + id);
+    if (el) el.onclick = () => vmAction(action);
+  });
+  ["vmRefreshBtn", "vmRefreshBtnH"].forEach((id) => {
+    const el = $("#" + id);
+    if (el) el.onclick = () => { loadVmPanel(); loadVmJobs(); };
+  });
+  const cancel = $("#vmCancelJobBtn");
+  if (cancel) {
+    cancel.onclick = async () => {
+      const id = $("#vmJobSel")?.value;
+      if (!id) return;
+      await api.post("/api/vm/jobs/cancel", { job_id: id });
+      loadVmJobs();
+    };
+  }
+  const refreshJobs = $("#vmRefreshJobsBtn");
+  if (refreshJobs) refreshJobs.onclick = () => loadVmJobs();
+  const recon = $("#termReconnectBtn");
+  if (recon) recon.onclick = () => { term.ws?.close(); term.ws = null; initTerminal(); };
+  const refreshSess = $("#termRefreshSessionsBtn");
+  if (refreshSess) refreshSess.onclick = () => loadTermSessions();
+}
+wireVmButtons();
+
+/* ============ Space-Routen (PaaS) ============ */
+async function loadSpaceRoutes() {
+  const list = $("#spaceRouteList");
+  if (!list) return;
+  const r = await api.get("/api/space/routes");
+  const routes = r.routes || [];
+  list.innerHTML = routes.length ? "" : `<p class="mut">Noch keine Space-Routen. Lege oben eine an (z. B. /api/hello).</p>`;
+  routes.forEach((route) => {
+    const c = document.createElement("div");
+    c.className = "item-card";
+    c.innerHTML = `<div class="grow"><h3><span class="mono">${esc(route.path)}</span>
+      <span class="badge ${route.public === false ? "off" : "on"}">${route.public === false ? "privat" : "public"}</span>
+      <span class="badge off">${esc(route.type)}</span></h3>
+      <div class="meta">${esc(route.file || "")}${route.updated_at ? " · " + esc(route.updated_at) : ""}</div></div>
+      <div style="display:flex;gap:6px">
+        <button class="icon-btn" data-a="edit">${icon("gear")}Laden</button>
+        <button class="icon-btn danger" data-a="del">${icon("trash")}</button>
+      </div>`;
+    c.querySelector('[data-a="edit"]').onclick = () => {
+      $("#spacePath").value = route.path;
+      $("#spaceType").value = route.type || "api";
+      $("#spacePublic").checked = route.public !== false;
+      $("#spaceMsg").textContent = "Route geladen — Code ggf. in Dateien bearbeiten oder neu speichern.";
+    };
+    c.querySelector('[data-a="del"]').onclick = async () => {
+      await api.del("/api/space/routes", { path: route.path });
+      loadSpaceRoutes();
+    };
+    list.appendChild(c);
+  });
+}
+
+function wireSpaceUi() {
+  const save = $("#spaceSaveBtn");
+  if (save) {
+    save.onclick = async () => {
+      const path = $("#spacePath").value.trim();
+      const code = $("#spaceCode").value;
+      if (!path || !code) { $("#spaceMsg").textContent = "Pfad und Code nötig."; return; }
+      const r = await api.post("/api/space/routes", {
+        path,
+        route_type: $("#spaceType").value,
+        code,
+        public: $("#spacePublic").checked,
+      });
+      $("#spaceMsg").textContent = r.error ? r.error : `Gespeichert: ${r.route?.path || path}`;
+      if (!r.error) loadSpaceRoutes();
+    };
+  }
+  const refresh = $("#spaceRefreshBtn");
+  if (refresh) refresh.onclick = () => loadSpaceRoutes();
+}
+wireSpaceUi();
 
 /* ============ Automatisierungen ============ */
 async function loadTasks() {

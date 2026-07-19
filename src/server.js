@@ -724,11 +724,35 @@ const routes = {
   "GET /api/ingress/status": async (_req, _url, tenantContext) => {
     const tId = tenantId(tenantContext);
     const vm = getVmInstance(tId);
+    const base = ingressStatusForTenant(tId, vm?.ip_address || "");
+    const wanIp = config.ingress.wanIp || "45.84.197.154";
+    let ports = null;
+    const ip = vm?.ip_address || "";
+    const m = ip.match(/^10\.10\.0\.(\d+)$/);
+    if (m) {
+      const n = Number(m[1]);
+      ports = {
+        wan_ip: wanIp,
+        ssh: { public: 10000 + n, target: `${ip}:22`, url: `ssh://ubuntu@${wanIp}:${10000 + n}` },
+        space: { public: 11000 + n, target: `${ip}:3000`, url: `http://${wanIp}:${11000 + n}` },
+        agent: { public: 12000 + n, target: `${ip}:8100`, url: `http://${wanIp}:${12000 + n}` },
+      };
+    }
+    let metadata = {};
+    try {
+      metadata = typeof vm?.metadata === "string" ? JSON.parse(vm.metadata || "{}") : (vm?.metadata || {});
+    } catch { /* ignore */ }
     return json({
       ok: true,
-      ...ingressStatusForTenant(tId, vm?.ip_address || ""),
+      ...base,
       vm_state: vm?.state || null,
+      vm_ip: ip || null,
+      public_url: vm ? `https://${base.hostname}` : null,
+      ports,
+      bridge: "vmbr1",
       configured: config.ingress.enabled,
+      openwrt_manual: true,
+      metadata,
     });
   },
 
