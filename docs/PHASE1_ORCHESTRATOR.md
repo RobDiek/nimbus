@@ -2,29 +2,19 @@
 
 ## Bestandsaufnahme (Status)
 
-Vom Cloud-Agenten-Environment aus:
+Live auf `45.84.197.121` geprüft — Details: `docs/PHASE1_INVENTORY.md`.
 
 | Check | Ergebnis |
 |---|---|
-| `https://45.84.197.121:8006` | erreichbar (HTTP 200) |
-| SSH `root@45.84.197.121:22` | TCP connect OK, danach **Connection reset** beim Key-Exchange |
-| SSH-Keys im Agent | keine vorhanden |
-| `qm list` / `qm config 9000` | **nicht ausführbar** (kein Host-Shell-Zugang) |
-
-Bitte einmal **auf dem Proxmox-Host** ausführen und Output teilen:
+| Template **9000** | vorhanden (`ubuntu-cloud-template`, ciuser=ubuntu, 3.5G, agent on) |
+| Storage | `local` (nicht local-lvm) |
+| OpenWRT **107** | LAN `10.10.0.1`, WAN `45.84.197.154` |
+| Golden Builder | VMID **9100** auf `vmbr1` / `10.10.0.200` (Klon, 9000 unberührt) |
+| Portforwards | 10200/11200/12200 → 9100 |
 
 ```bash
-cd /path/to/nimbus
 sudo bash scripts/host/inventory.sh 9000
 ```
-
-Erwartete Prüfpunkte im Output:
-
-- Existiert VMID **9000** und ist es ein Template (`template: 1`)?
-- Cloud-Init-Drive vorhanden?
-- `net0` / Bridge (`vmbr0`?)
-- SCSI/VirtIO-Disk + Storage-Name
-- `agent: 1` / qemu-guest-agent vorbereitet?
 
 ---
 

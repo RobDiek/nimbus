@@ -33,24 +33,29 @@ export const config = {
     tokenId: (process.env.PROXMOX_TOKEN_ID || "").trim(),
     tokenSecret: (process.env.PROXMOX_TOKEN_SECRET || "").trim(),
     node: (process.env.PROXMOX_NODE || "").trim(),
-    storage: (process.env.PROXMOX_STORAGE || "local-lvm").trim(),
-    bridge: (process.env.PROXMOX_BRIDGE || "vmbr0").trim(),
+    storage: (process.env.PROXMOX_STORAGE || "local").trim(),
+    bridge: (process.env.PROXMOX_BRIDGE || "vmbr1").trim(),
     // Golden Image / Ubuntu Template
     templateVmid: toNumber(process.env.PROXMOX_TEMPLATE_VMID, 9000),
     vmidStart: toNumber(process.env.PROXMOX_VMID_START, 5000),
     cpuCores: toNumber(process.env.PROXMOX_VM_CORES, 2),
     memoryMb: toNumber(process.env.PROXMOX_VM_MEMORY_MB, 4096),
     diskGb: toNumber(process.env.PROXMOX_VM_DISK_GB, 32),
-    ciUser: (process.env.PROXMOX_CI_USER || "nimbus").trim(),
-    ciSshPublicKey: (process.env.PROXMOX_CI_SSH_PUBLIC_KEY || "").trim(),
+    ciUser: (process.env.PROXMOX_CI_USER || "ubuntu").trim(),
+    ciSshPublicKey: (process.env.PROXMOX_CI_SSH_PUBLIC_KEY || "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK3dIaMkaR8OYgz9QIzNxhR4h9zkm98IVQVSem4DTF/q DiekerIT SSH Key").trim(),
     ciPassword: (process.env.PROXMOX_CI_PASSWORD || "").trim(),
-    ipConfig: (process.env.PROXMOX_IPCONFIG || "ip=dhcp").trim(),
+    // LAN hinter OpenWRT (vmbr1): 10.10.0.0/24
+    ipConfig: (process.env.PROXMOX_IPCONFIG || "ip=10.10.0.200/24,gw=10.10.0.1").trim(),
     nameserver: (process.env.PROXMOX_NAMESERVER || "1.1.1.1").trim(),
     searchdomain: (process.env.PROXMOX_SEARCHDOMAIN || "agents.diekerit.com").trim(),
     sshConnectTimeoutSec: toNumber(process.env.PROXMOX_SSH_CONNECT_TIMEOUT_SEC, 5),
     // Wartezeit bis qemu-guest-agent eine IP liefert
     ipWaitTimeoutMs: toNumber(process.env.PROXMOX_IP_WAIT_TIMEOUT_MS, 180000),
     ipWaitIntervalMs: toNumber(process.env.PROXMOX_IP_WAIT_INTERVAL_MS, 4000),
+    lanCidr: (process.env.NIMBUS_LAN_CIDR || "10.10.0.0/24").trim(),
+    lanGateway: (process.env.NIMBUS_LAN_GW || "10.10.0.1").trim(),
+    lanPoolStart: toNumber(process.env.NIMBUS_LAN_POOL_START, 200),
+    lanPoolEnd: toNumber(process.env.NIMBUS_LAN_POOL_END, 249),
   },
 
   ingress: {
@@ -58,6 +63,14 @@ export const config = {
     baseDomain: (process.env.NIMBUS_BASE_DOMAIN || "agents.diekerit.com").trim(),
     spacePort: toNumber(process.env.NIMBUS_SPACE_PORT, 3000),
     agentPort: toNumber(process.env.NIMBUS_AGENT_PORT, 8100),
+    // OpenWRT WAN — Portforwards statt direkter Public-IP auf VMs
+    wanIp: (process.env.OPENWRT_WAN_IP || "45.84.197.154").trim(),
+    openwrt: {
+      enabled: toBool(process.env.OPENWRT_ENABLED, true),
+      lanGateway: (process.env.NIMBUS_LAN_GW || "10.10.0.1").trim(),
+      // Passwort nur per Env — niemals committen
+      password: (process.env.OPENWRT_PASS || "").trim(),
+    },
     zoraxy: {
       baseUrl: (process.env.ZORAXY_BASE_URL || "").trim(),
       // Session-Cookie oder API-Token (je nach Zoraxy-Setup)
