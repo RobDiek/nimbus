@@ -89,7 +89,7 @@ done
 [[ -n "$HOSTNAME_SLUG" ]] || { usage; die "hostname-slug fehlt"; }
 
 # Hostname: nur DNS-sichere Zeichen
-HOSTNAME_SLUG="$(echo "$HOSTNAME_SLUG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+|; s/-+$//; s/-+/-/g')"
+HOSTNAME_SLUG="$(echo "$HOSTNAME_SLUG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')"
 [[ -n "$HOSTNAME_SLUG" ]] || die "Hostname nach Sanitizing leer"
 # Optional: -workspace Suffix nicht erzwingen, aber erlauben
 VM_NAME="$HOSTNAME_SLUG"
