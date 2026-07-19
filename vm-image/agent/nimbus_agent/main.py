@@ -107,12 +107,21 @@ def _compose_prompt(req: AskRequest) -> str:
     return (req.prompt or "").strip()
 
 
+def _last_user_text(req: AskRequest) -> str:
+    """Letzte User-Nachricht bzw. Prompt — für Intent-Fallback."""
+    if req.messages:
+        for m in reversed(req.messages):
+            if (m.role or "").lower() == "user" and (m.content or "").strip():
+                return m.content.strip()
+    return (req.prompt or "").strip()
+
+
 async def run_with_pydantic_ai(req: AskRequest) -> AskResponse:
     """Bevorzugter Pfad: Pydantic-AI Agent mit Kern-Tools."""
     try:
         from pydantic_ai import Agent
     except ImportError:
-        return await run_tool_loop_fallback(req.prompt or _compose_prompt(req))
+        return await run_tool_loop_fallback(_last_user_text(req) or _compose_prompt(req))
 
     soul = load_system_prompt(os.environ.get("NIMBUS_AGENT_SOUL_PATH"))
     system = (req.system or "").strip() or soul
@@ -204,7 +213,8 @@ async def ask(req: AskRequest):
         try:
             return await run_with_pydantic_ai(req)
         except Exception as err:  # noqa: BLE001 — operativer Fallback
-            prompt = _compose_prompt(req)
+            # Intent-Fallback auf letzte User-Nachricht (nicht die ganze Historie)
+            prompt = _last_user_text(req) or _compose_prompt(req)
             fallback = await run_tool_loop_fallback(prompt)
             fallback.output = f"[pydantic-ai error: {err}]\n\n{fallback.output}"
             fallback.mode = "fallback-after-error"

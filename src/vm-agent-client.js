@@ -68,12 +68,10 @@ export async function findReadyVmAgent(tenantContext) {
   if (vm.state && !["ready", "running"].includes(vm.state)) return null;
 
   const urls = resolveVmAgentUrls(vm);
-  for (const url of urls) {
-    const probe = await probeVmAgent(url);
-    if (probe.ok) {
-      return { vm, baseUrl: url, health: probe.data };
-    }
-  }
+  // Parallel probe — LAN kann aus dem Control-Plane unerreichbar sein
+  const probes = await Promise.all(urls.map((url) => probeVmAgent(url, 2000)));
+  const hit = probes.find((p) => p.ok);
+  if (hit) return { vm, baseUrl: hit.baseUrl, health: hit.data };
   return null;
 }
 

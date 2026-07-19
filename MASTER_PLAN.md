@@ -22,7 +22,7 @@ mit Root-Rechten sicher gekapselt bleibt.
 | VM-Template | Ubuntu Golden Image, Cloud-Init, Template-VMID **9000** |
 | Control Plane | Bun (`src/`), Proxmox-/Zoraxy-Orchestrierung |
 | Agent Core (in der VM) | Python + Pydantic-AI (`vm-image/agent/`) |
-| PaaS / Space (in der VM) | Bun + Hono (`vm-image/space/`) |
+| PaaS / Space (in der VM) | Bun + **Vite + React + Tailwind CSS 4** + Hono (`vm-image/space/`) |
 
 ## 3. Architektur-Phasen
 
@@ -36,9 +36,15 @@ mit Root-Rechten sicher gekapselt bleibt.
 - Kern-Tools: `bash`, `read_file`, `write_file`, `list_directory`, `agent_browser`
 
 ### Phase 3 — Dynamisches PaaS (`zo.space`-Äquivalent)
-- Bootstrap `/__substrate/space` mit Hono
+- Bootstrap `/__substrate/space` mit **Vite + React + Tailwind CSS 4** + Hono
 - Tools: `write_space_route`, `edit_space_route`, `list_space_routes`
+- `route_type=page` → `pages/*.tsx` (React, HMR); `api` → `api/*.js`
 - Dynamisches Routing von Workspace-Assets, API-Routen und Pages
+
+### Phase 2b — Control-Plane-Chat → In-VM-Agent
+- Setting `chat_backend`: `auto` | `local` | `vm`
+- Bei ready-VM: Proxy auf `POST /v1/ask` (LAN oder WAN `12000+N`)
+- Fallback auf lokalen Control-Plane-Agent bei Timeout/Fehler
 
 ### Phase 4 — Ingress & Netzwerk
 - DNS: Cloudflare Wildcard `*.agents.diekerit.com` → Public IP
