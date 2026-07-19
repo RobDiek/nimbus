@@ -6,10 +6,12 @@ Live auf `45.84.197.121` geprüft — Details: `docs/PHASE1_INVENTORY.md`.
 
 | Check | Ergebnis |
 |---|---|
-| Template **9000** | vorhanden (`ubuntu-cloud-template`, ciuser=ubuntu, 3.5G, agent on) |
+| Template **9000** | vorhanden (`ubuntu-cloud-template`, **unberührt**) |
+| Template **9001** | `nimbus-golden` (Agent+Space, gebacken aus 9100) |
 | Storage | `local` (nicht local-lvm) |
 | OpenWRT **107** | LAN `10.10.0.1`, WAN `45.84.197.154` |
-| Golden Builder | VMID **9100** auf `vmbr1` / `10.10.0.200` (Klon, 9000 unberührt) |
+| Golden Builder | VMID **9100** auf `vmbr1` / `10.10.0.200` |
+| DNS | Cloudflare `*.nimbus.diekerit.com` → WAN |
 | Portforwards | 10200/11200/12200 → 9100 |
 
 ```bash

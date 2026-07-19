@@ -36,7 +36,8 @@ export const config = {
     storage: (process.env.PROXMOX_STORAGE || "local").trim(),
     bridge: (process.env.PROXMOX_BRIDGE || "vmbr1").trim(),
     // Golden Image / Ubuntu Template
-    templateVmid: toNumber(process.env.PROXMOX_TEMPLATE_VMID, 9000),
+    // Nimbus Golden Image (Agent+Space) — 9000 bleibt unberührtes Ubuntu-Cloud-Template
+    templateVmid: toNumber(process.env.PROXMOX_TEMPLATE_VMID, 9001),
     vmidStart: toNumber(process.env.PROXMOX_VMID_START, 5000),
     cpuCores: toNumber(process.env.PROXMOX_VM_CORES, 2),
     memoryMb: toNumber(process.env.PROXMOX_VM_MEMORY_MB, 4096),

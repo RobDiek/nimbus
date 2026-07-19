@@ -123,7 +123,7 @@ export async function cloneTenantVm(tenantId, vmidOverride) {
 
 /**
  * Cloud-Init: User, SSH, Netz + Hostname (für DNS/Ingress).
- * Hostname = Tenant-Slug; FQDN = <slug>.agents.diekerit.com
+ * Hostname = Tenant-Slug; FQDN = <slug>.nimbus.diekerit.com
  */
 export async function configureTenantCloudInit(vmid, tenantId, username = config.proxmox.ciUser || "ubuntu", ipconfigOverride) {
   const p = config.proxmox;

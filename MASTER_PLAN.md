@@ -19,7 +19,7 @@ mit Root-Rechten sicher gekapselt bleibt.
 | Hypervisor | Proxmox VE (`PROXMOX_BASE_URL`, Default-Host `45.84.197.121`) |
 | DNS | Cloudflare (`*.nimbus.diekerit.com`) |
 | Ingress | OpenWRT-DNAT + Cloudflare-DNS; Zoraxy Host→Origin **manuell** |
-| VM-Template | Ubuntu Golden Image, Cloud-Init, Template-VMID **9000** |
+| VM-Template | **9001** `nimbus-golden` (Agent+Space); Basis **9000** unberührt |
 | Control Plane | Bun (`src/`), Proxmox-/Zoraxy-Orchestrierung |
 | Agent Core (in der VM) | Python + Pydantic-AI (`vm-image/agent/`) |
 | PaaS / Space (in der VM) | Bun + **Vite + React + Tailwind CSS 4** + Hono (`vm-image/space/`) |
