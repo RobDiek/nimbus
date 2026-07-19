@@ -575,17 +575,23 @@ function formatVmStatus(vm, ingress, configured) {
     `state=${vm.state || "?"}  vmid=${vm.vmid ?? "—"}  node=${vm.node || "—"}`,
     `ip=${vm.ip_address || "—"}  user=${vm.username || "ubuntu"}  bridge=vmbr1`,
   ];
-  if (vm.public_hostname || vm.public_url) {
-    lines.push(`fqdn=${vm.public_hostname || "—"}  url=${vm.public_url || "—"}`);
+  const hostname = ingress?.hostname || vm.public_hostname || "";
+  const url = ingress?.url || vm.public_url || (hostname ? `https://${hostname}` : "");
+  if (hostname || url) {
+    lines.push(`fqdn=${hostname || "—"}`);
+    lines.push(`url=${url || "—"}`);
+  }
+  if (ingress?.cloudflare) {
+    const cf = ingress.cloudflare;
+    lines.push(`dns=${cf.enabled ? "cloudflare-auto" : "cloudflare-aus"}  domain=${cf.baseDomain || "—"}  wan=${cf.wanIp || "—"}`);
   }
   if (ingress?.ports) {
     const p = ingress.ports;
     lines.push(`WAN ${p.wan_ip}: SSH :${p.ssh.public}  Space :${p.space.public}  Agent :${p.agent.public}`);
-    lines.push(`Space-URL (Portforward): ${p.space.url}`);
-  } else if (ingress?.hostname) {
-    lines.push(`Hostname: ${ingress.hostname}`);
-    lines.push(`DNS: Cloudflare auto → ${ingress.cloudflare?.wanIp || "WAN"} (Zoraxy Host→Origin manuell)`);
+    lines.push(`Space (Portforward): ${p.space.url}`);
+    lines.push(`Agent (Portforward): ${p.agent.url}`);
   }
+  lines.push("Hinweis: Zoraxy Host→Origin bewusst manuell; DNS kommt von Cloudflare.");
   if (vm.last_error) lines.push(`error: ${vm.last_error}`);
   return lines.join("\n");
 }
@@ -654,6 +660,24 @@ function wireVmButtons() {
     const el = $("#" + id);
     if (el) el.onclick = () => { loadVmPanel(); loadVmJobs(); };
   });
+  const dnsBtn = $("#dnsEnsureBtnH");
+  if (dnsBtn) {
+    dnsBtn.onclick = async () => {
+      const msg = $("#dnsMsg");
+      if (msg) msg.textContent = "DNS wird aktualisiert …";
+      try {
+        const r = await api.post("/api/dns/ensure", {});
+        if (msg) {
+          msg.textContent = r.ok
+            ? `DNS ok: ${r.hostname || ""} → ${r.content || r.record?.content || ""} (${r.record?.action || r.action || "done"})`
+            : `DNS-Fehler: ${r.error || JSON.stringify(r)}`;
+        }
+        await loadVmPanel();
+      } catch (err) {
+        if (msg) msg.textContent = `DNS-Fehler: ${err.message || err}`;
+      }
+    };
+  }
   const cancel = $("#vmCancelJobBtn");
   if (cancel) {
     cancel.onclick = async () => {

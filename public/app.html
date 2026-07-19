@@ -323,26 +323,31 @@
             <button id="vmStartBtnH" class="btn">Start</button>
             <button id="vmStopBtnH" class="btn">Stop</button>
             <button id="vmRefreshBtnH" class="btn">Aktualisieren</button>
+            <button id="dnsEnsureBtnH" class="btn">DNS aktualisieren</button>
           </div>
           <pre id="vmStatusBox" class="logs" style="min-height:72px;margin:0">VM-Status wird geladen …</pre>
+          <p class="mut" id="dnsMsg" style="margin:8px 0 0"></p>
         </div>
 
         <h2 class="sec-title">Space-Routen (PaaS)</h2>
-        <p class="page-sub" style="margin-top:-6px">Dynamische API-/Page-Routen unter <span class="mono">__substrate/space</span>.</p>
+        <p class="page-sub" style="margin-top:-6px">
+          API-Handler oder React-Pages (<span class="mono">pages/*.tsx</span>, Tailwind) unter
+          <span class="mono">__substrate/space</span>.
+        </p>
         <div class="card form-card">
           <div class="row-form" style="flex-wrap:wrap">
-            <input id="spacePath" class="mono" placeholder="/api/hello" style="max-width:180px" />
+            <input id="spacePath" class="mono" placeholder="/" style="max-width:180px" />
             <select id="spaceType" style="max-width:120px">
+              <option value="page">page (React)</option>
               <option value="api">api</option>
-              <option value="page">page</option>
               <option value="static">static</option>
             </select>
             <label class="mut" style="display:flex;align-items:center;gap:6px;margin:0">
               <input type="checkbox" id="spacePublic" checked /> öffentlich
             </label>
           </div>
-          <label>Code / HTML</label>
-          <textarea id="spaceCode" class="mono" rows="6" placeholder="return c.json({ ok: true, hello: 'nimbus' });"></textarea>
+          <label id="spaceCodeLabel">React-TSX / Code</label>
+          <textarea id="spaceCode" class="mono" rows="6" placeholder="export default function Hello() { return <main className=&quot;p-8&quot;>Hello</main>; }"></textarea>
           <div class="row-form">
             <button id="spaceSaveBtn" class="btn dark">Route speichern</button>
             <button id="spaceRefreshBtn" class="btn">Liste aktualisieren</button>
