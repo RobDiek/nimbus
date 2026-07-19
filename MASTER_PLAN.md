@@ -40,9 +40,10 @@ mit Root-Rechten sicher gekapselt bleibt.
 - Tools: `write_space_route`, `edit_space_route`, `list_space_routes`
 - Dynamisches Routing von Workspace-Assets, API-Routen und Pages
 
-### Phase 4 — Ingress & Netzwerk-Automation
-- Nach VM-Start: Zoraxy-Route `\<tenant\>.agents.diekerit.com` → `VM-IP:SPACE_PORT`
-- DNS bleibt bei Cloudflare (Wildcard); Zoraxy terminiert TLS
+### Phase 4 — Ingress & Netzwerk
+- DNS: Cloudflare Wildcard `*.agents.diekerit.com` → Public IP
+- **Phase 1:** Zoraxy-Routing **manuell** (Orchestrator gibt nur IP/FQDN aus)
+- Später optional: Zoraxy-API-Automation (`src/zoraxy.js`)
 
 ## 4. Design-Prinzipien
 

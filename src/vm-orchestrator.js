@@ -22,8 +22,8 @@ import {
   deployAgentToVm,
   waitForVmIp,
 } from "./proxmox.js";
-import { ensureTenantIngress, removeTenantIngress } from "./zoraxy.js";
 import { deploySpaceToVm, ensureSpaceScaffold } from "./space.js";
+// Phase 1: Zoraxy-Routing bewusst manuell — kein ensureTenantIngress im Provision-Pfad.
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -184,10 +184,9 @@ class VmOrchestrator {
 
   /**
    * Provisioning-Pipeline (Control Plane only — niemals als Agent-Tool):
-   * 1) Proxmox clone + cloud-init + boot
-   * 2) Bootstrap + Agent Core
-   * 3) Space-Substrat
-   * 4) Zoraxy Ingress
+   * 1) Proxmox clone + cloud-init + boot + IP ausgeben
+   * 2) Optional Bootstrap + Agent/Space-Deploy
+   * Zoraxy-Ingress: Phase 1 manuell (IP wird nur geloggt/gespeichert).
    */
   async processJob(job) {
     const tenantId = job.tenantId;
@@ -229,27 +228,28 @@ class VmOrchestrator {
         logger.warn("space_deploy_soft_fail", { tenantId, error: spaceDeploy.error || spaceDeploy.stderr });
       }
 
-      upsertVmInstance(tenantId, { state: "configuring_ingress", last_error: "" });
-      let ingress = null;
-      try {
-        ingress = await ensureTenantIngress({
-          tenantId,
-          ip: vmData.ip_address,
-          port: config.ingress.spacePort,
-        });
-      } catch (err) {
-        logger.warn("ingress_soft_fail", { tenantId, error: String(err?.message || err) });
-        ingress = { ok: false, error: String(err?.message || err) };
-      }
-
+      const hostname = publicHostnameForTenant(tenantId);
       const meta = {
         ...(typeof vmData.metadata === "object" ? vmData.metadata : {}),
-        public_hostname: publicHostnameForTenant(tenantId),
-        public_url: `https://${publicHostnameForTenant(tenantId)}`,
-        ingress,
+        public_hostname: hostname,
+        public_url: `https://${hostname}`,
+        ingress: {
+          mode: "manual",
+          note: "Zoraxy-Route manuell anlegen",
+          target: vmData.ip_address ? `${vmData.ip_address}:${config.ingress.spacePort}` : null,
+          hostname,
+        },
         agent_deploy: { ok: !!agentDeploy.ok, files: agentDeploy.files },
         space_deploy: { ok: !!spaceDeploy.ok, files: spaceDeploy.files },
       };
+
+      logger.info("provision_ready_manual_ingress", {
+        tenantId,
+        vmid: vmData.vmid,
+        ip: vmData.ip_address,
+        hostname,
+        zoraxy_hint: `${hostname} → ${vmData.ip_address || "<IP>"}:${config.ingress.spacePort}`,
+      });
 
       upsertVmInstance(tenantId, { state: "ready", last_error: "", metadata: meta });
       return;
@@ -265,11 +265,12 @@ class VmOrchestrator {
       if (!ip) ip = (await getVmIpBestEffort(vm.vmid)) || vm.ip_address || "";
       const state = status?.status === "running" ? "ready" : "starting";
       if (ip) {
-        try {
-          await ensureTenantIngress({ tenantId, ip, port: config.ingress.spacePort });
-        } catch (err) {
-          logger.warn("ingress_rebind_failed", { tenantId, error: String(err?.message || err) });
-        }
+        logger.info("vm_started_manual_ingress", {
+          tenantId,
+          ip,
+          hostname: publicHostnameForTenant(tenantId),
+          zoraxy_hint: `${publicHostnameForTenant(tenantId)} → ${ip}:${config.ingress.spacePort}`,
+        });
       }
       upsertVmInstance(tenantId, { state, ip_address: ip, last_error: "" });
       return;
@@ -277,7 +278,6 @@ class VmOrchestrator {
 
     if (job.type === "stop") {
       await stopVm(vm.vmid);
-      try { await removeTenantIngress({ tenantId }); } catch { /* best effort */ }
       upsertVmInstance(tenantId, { state: "stopped", last_error: "" });
       return;
     }
