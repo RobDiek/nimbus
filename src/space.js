@@ -347,3 +347,38 @@ echo ${JSON.stringify(b64)} | base64 -d > ${JSON.stringify(remoteFile)}
     stderr: start.stderr,
   };
 }
+
+/**
+ * Space-Service in der Tenant-VM neu starten (systemd / Fallback nohup).
+ * Nur Control Plane — kein Agent-Tool. UI zeigt keine Infra-Details.
+ */
+export async function restartSpaceOnVm(tenantId) {
+  const vm = getVmInstance(tenantId);
+  if (!vm?.ip_address) return { ok: false, error: "Workspace noch nicht bereit." };
+  const user = vm.username || config.proxmox.ciUser || "ubuntu";
+  const remoteRoot = join(config.space.workspaceMount, config.space.substratePath).replace(/\\/g, "/");
+  const script = `
+set -euo pipefail
+export PATH="$HOME/.bun/bin:/usr/local/bin:$PATH"
+if systemctl list-unit-files 2>/dev/null | grep -q '^nimbus-space'; then
+  sudo systemctl restart nimbus-space
+  sleep 1
+  systemctl is-active nimbus-space || true
+else
+  pkill -f '__substrate/space/server.js' 2>/dev/null || true
+  cd ${JSON.stringify(remoteRoot)}
+  nohup bun run server.js > /tmp/nimbus-space.log 2>&1 &
+  echo restarted
+fi
+curl -sf http://127.0.0.1:${config.ingress.spacePort}/__health >/dev/null && echo healthy || echo started
+`;
+  const r = await execOnVmViaSsh({
+    ip: vm.ip_address,
+    username: user,
+    command: `bash -lc ${JSON.stringify(script)}`,
+  });
+  if (!r.ok) {
+    return { ok: false, error: "Space-Server konnte nicht neu gestartet werden." };
+  }
+  return { ok: true };
+}

@@ -42,9 +42,15 @@ import { vmOrchestrator } from "./vm-orchestrator.js";
 import { ingressStatusForTenant, ensureTenantIngress } from "./zoraxy.js";
 import { ensureTenantDns, ensureNimbusBaseDns, cloudflareStatus } from "./cloudflare.js";
 import {
-  listSpaceRoutes, writeSpaceRoute, editSpaceRoute, deleteSpaceRoute, ensureSpaceScaffold,
+  listSpaceRoutes, writeSpaceRoute, editSpaceRoute, deleteSpaceRoute, ensureSpaceScaffold, restartSpaceOnVm,
 } from "./space.js";
 import { shouldUseVmAgent, runVmAgentChat, getChatBackendPreference } from "./vm-agent-client.js";
+import {
+  listSecrets, upsertSecret, deleteSecret,
+  listAccessTokens, createAccessToken, deleteAccessToken,
+  getChannels, saveChannels, getUxSettings, saveUxSettings,
+  getChannelModels, saveChannelModels, getToolsSettings, saveToolsSettings,
+} from "./workspace-settings.js";
 import { createSkillFile, getSkillByNameOrId, importSkillFromContent, listSkills, scanSkills, setSkillEnabled, buildSkillSystemAppendix } from "./skills.js";
 import { browserClick, browserOpen, browserScreenshot, browserSubmit, createBrowserSession, getBrowserSession, listBrowserSessions } from "./browser.js";
 import { completeOAuth, disconnectOAuth, listOAuthProviders, saveManualToken, startOAuth } from "./oauth.js";
@@ -363,6 +369,74 @@ const routes = {
     return json({ ok: true });
   },
 
+  // --- Settings: Secrets / Tokens / Channels / UX (zo-kompatibel) ---
+  "GET /api/secrets": (_req, _url, tenantContext) => {
+    return json({ ok: true, secrets: listSecrets(tenantId(tenantContext)) });
+  },
+  "POST /api/secrets": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(upsertSecret(tenantId(tenantContext), b.key, b.value));
+  },
+  "DELETE /api/secrets": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(deleteSecret(tenantId(tenantContext), b.key));
+  },
+  "GET /api/access-tokens": (_req, _url, tenantContext) => {
+    return json({ ok: true, tokens: listAccessTokens(tenantId(tenantContext)) });
+  },
+  "POST /api/access-tokens": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(createAccessToken(tenantId(tenantContext), b.name));
+  },
+  "DELETE /api/access-tokens": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(deleteAccessToken(tenantId(tenantContext), b.id));
+  },
+  "GET /api/channels": (_req, _url, tenantContext) => {
+    return json({ ok: true, channels: getChannels(tenantId(tenantContext)) });
+  },
+  "POST /api/channels": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveChannels(tenantId(tenantContext), b));
+  },
+  "GET /api/ux": (_req, _url, tenantContext) => {
+    return json({ ok: true, ux: getUxSettings(tenantId(tenantContext)) });
+  },
+  "POST /api/ux": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveUxSettings(tenantId(tenantContext), b));
+  },
+  "GET /api/channel-models": (_req, _url, tenantContext) => {
+    return json({ ok: true, models: getChannelModels(tenantId(tenantContext)) });
+  },
+  "POST /api/channel-models": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveChannelModels(tenantId(tenantContext), b.models || b));
+  },
+  "GET /api/tools-settings": (_req, _url, tenantContext) => {
+    return json({ ok: true, tools: getToolsSettings(tenantId(tenantContext)) });
+  },
+  "POST /api/tools-settings": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(saveToolsSettings(tenantId(tenantContext), b));
+  },
+  /** Soft-Reboot des Workspace-Space (kein Hypervisor) */
+  "POST /api/workspace/reboot": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const result = await restartSpaceOnVm(tId);
+    if (!result.ok) return json({ ok: false, error: result.error || "Neustart fehlgeschlagen." }, 502);
+    setSettingTenant(tId, "last_reboot_at", new Date().toISOString());
+    return json({ ok: true, at: new Date().toISOString() });
+  },
+  "GET /api/workspace/restore-points": (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const last = getSettingTenant(tId, "last_reboot_at", "");
+    return json({
+      ok: true,
+      points: last ? [{ id: "last", label: last, at: last }] : [],
+    });
+  },
+
   // --- Sessions ---
   "GET /api/sessions": (_req, _url, tenantContext) => {
     const tId = tenantId(tenantContext);
@@ -605,9 +679,21 @@ const routes = {
   // --- Files ---
   "GET /api/files": async (req, url, tenantContext) => json(await executeTool("list_files", { path: url.searchParams.get("path") || "." }, tenantContext)),
   "GET /api/file": async (req, url, tenantContext) => json(await executeTool("read_file", { path: url.searchParams.get("path") }, tenantContext)),
+  "GET /api/files/read": async (req, url, tenantContext) => json(await executeTool("read_file", { path: url.searchParams.get("path") }, tenantContext)),
   "POST /api/file": async (req, _url, tenantContext) => {
     const b = await body(req);
     return json(await executeTool("write_file", { path: b.path, content: b.content }, tenantContext));
+  },
+  "POST /api/files/write": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(await executeTool("write_file", { path: b.path, content: b.content }, tenantContext));
+  },
+  "POST /api/files/upload": async (req, _url, tenantContext) => {
+    const b = await body(req);
+    return json(await executeTool("write_file_base64", {
+      path: b.path,
+      content_base64: b.content_base64,
+    }, tenantContext));
   },
 
   // --- Upload (multipart/form-data) ---
@@ -738,7 +824,15 @@ const routes = {
 
   // --- Space (dynamisches PaaS) ---
   "GET /api/space/routes": async (_req, _url, tenantContext) => {
-    return json(listSpaceRoutes(tenantContext));
+    const raw = listSpaceRoutes(tenantContext);
+    const routes = (raw.routes || []).map((r) => ({
+      path: r.path,
+      type: r.type,
+      public: r.public !== false,
+      name: r.name || null,
+      updated_at: r.updated_at || null,
+    }));
+    return json({ ok: true, routes });
   },
 
   "POST /api/space/routes": async (req, _url, tenantContext) => {
@@ -755,6 +849,13 @@ const routes = {
   "DELETE /api/space/routes": async (req, _url, tenantContext) => {
     const b = await body(req);
     return json(deleteSpaceRoute(tenantContext, b.path));
+  },
+
+  "POST /api/space/restart": async (_req, _url, tenantContext) => {
+    const tId = tenantId(tenantContext);
+    const result = await restartSpaceOnVm(tId);
+    if (!result.ok) return json({ ok: false, error: result.error || "Neustart fehlgeschlagen." }, 502);
+    return json({ ok: true });
   },
 
   // --- Ingress (Cloudflare DNS + optional Zoraxy) — Control Plane only ---
