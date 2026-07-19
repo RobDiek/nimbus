@@ -1,19 +1,26 @@
 # Nimbus Golden Image — Bootstrap-Definition (Phase 1)
 
-Ziel: Aus einem nackten Ubuntu-Cloud-Image (Template **VMID 9000**) einen
-wiederverwendbaren **Agent-Workspace** machen.
+Ziel: Aus dem nackten Ubuntu-Cloud-Image (Template **VMID 9000**) einen
+wiederverwendbaren **Agent-Workspace** machen und als **eigenes Template** speichern.
 
-Das Bootstrap läuft **einmal im Template** (danach erneut als Template
-konvertieren) oder beim ersten Boot jeder User-VM via `vm-image/bootstrap.sh`.
+| VMID | Rolle |
+|---|---|
+| **9000** | `ubuntu-cloud-template` — Basis, **nicht überschreiben** |
+| **9100** | `nimbus-golden-builder` — laufender Builder (`vmbr1` / `10.10.0.200`) |
+| **9001** | `nimbus-golden` — **Produktions-Template** (Agent + Space gebacken) |
+
+Default für neue Workspaces: `PROXMOX_TEMPLATE_VMID=9001`.
 
 ## Empfohlene Reihenfolge
 
 1. Template 9000 prüfen (`scripts/host/inventory.sh`)
-2. Template klonen → temporäre Builder-VM
-3. `bootstrap.sh` als root ausführen
-4. Cloud-Init zurücksetzen (`cloud-init clean` o.ä.)
-5. VM herunterfahren, erneut als Template (`qm template <id>`) setzen  
-   **oder** 9000 in-place bootstrappen und wieder templaten
+2. Template klonen → Builder-VM **9100**
+3. Agent/Space bootstrappen und testen
+4. Golden Image backen:
+   ```bash
+   SOURCE_VMID=9100 TARGET_VMID=9001 bash scripts/host/bake_golden_template.sh
+   ```
+5. Cloud-Init wird im Bake bereinigt; 9001 wird `qm template`
 
 ## Pflichtpakete / Runtimes
 
@@ -21,8 +28,7 @@ konvertieren) oder beim ersten Boot jeder User-VM via `vm-image/bootstrap.sh`.
 |---|---|---|
 | Python 3.12+ | Agent-Backend (Pydantic-AI) | `apt` / deadsnakes falls nötig |
 | `python3-venv`, `pip` | isolierte Agent-Env | `apt` |
-| Bun | Space/PaaS (Hono) | `curl https://bun.sh/install` |
-| Node.js 22.x (optional) | Tooling/Vite falls nötig | NodeSource oder `apt` |
+| Bun | Space/PaaS (Vite+React+Hono) | `curl https://bun.sh/install` |
 | Docker Engine | User-Container in der VM | Docker apt repo |
 | qemu-guest-agent | IP-Erkennung für Orchestrator | `apt` + enable |
 | Basis-Tools | Ops | `git curl jq ripgrep unzip build-essential` |
@@ -32,11 +38,11 @@ konvertieren) oder beim ersten Boot jeder User-VM via `vm-image/bootstrap.sh`.
 ```text
 /home/workspace/                 # Nutzer-Workspace (Agent schreibt hierhin)
   __substrate/
-    space/                       # Hono PaaS (zo.space-Äquivalent)
+    space/                       # Vite + React + Tailwind 4 + Hono
       server.js
+      pages/*.tsx
       routes.json
-      routes/{api,page,static}/
-      public/
+      src/
   skills/                        # optionale SKILL.md Workflows
 /opt/nimbus-agent/               # Python Agent Core
   SOUL.md
@@ -50,36 +56,31 @@ konvertieren) oder beim ersten Boot jeder User-VM via `vm-image/bootstrap.sh`.
 
 | Service | Port | Start |
 |---|---|---|
-| nimbus-space (Bun/Hono) | 3000 | systemd `nimbus-space.service` oder nohup |
-| nimbus-agent (Python) | 8100 | systemd `nimbus-agent.service` (Phase 2) |
+| nimbus-space (Vite/React/Hono) | 3000 | systemd `nimbus-space.service` |
+| nimbus-agent (Python) | 8100 | systemd `nimbus-agent.service` |
 
-Phase 1 reicht: Pakete + Ordner + guest-agent. Agent/Space-Services können
-erst nach dem Deploy der `vm-image/`-Dateien dauerhaft laufen.
+## Cloud-Init-Erwartungen
 
-## Cloud-Init-Erwartungen an Template 9000
-
-- Cloud-Init aktiv (`ide2`/`scsi` cloudinit drive oder equivalent)
+- Cloud-Init aktiv
 - `qemu-guest-agent` installiert und enabled
-- Netz: DHCP auf `vmbr0` (oder dokumentierte Bridge)
-- SSH erlaubt für den CI-User (Default im Host-Skript: `root`)
-- Keine fest verdrahtete Hostname/Machine-ID (sonst Clone-Kollisionen)
+- Netz: `vmbr1` (LAN hinter OpenWRT)
+- SSH für CI-User `ubuntu`
+- Keine fest verdrahtete Hostname/Machine-ID im Template (sonst Clone-Kollisionen)
 
-## Manuelles Routing (Zoraxy) — bewusst nicht automatisiert
-
-Nach `create_workspace.sh`:
+## DNS & Ingress
 
 ```text
-<slug>.agents.diekerit.com        →  <VM-IP>:3000
-*.<slug>.agents.diekerit.com      →  <VM-IP>:3000   (optional, Wildcard)
+<slug>.nimbus.diekerit.com        →  WAN-IP (Cloudflare A-Record, auto)
+*.nimbus.diekerit.com             →  WAN-IP (Wildcard)
 ```
 
-Cloudflare Wildcard zeigt auf die Public IP; Zoraxy terminiert TLS und
-routet intern.
+Cloudflare-Automapping: `src/cloudflare.js` (Provisioning + `/api/dns/ensure`).
+Zoraxy Host→Origin bleibt bewusst manuell.
 
 ## Schnellstart Bootstrap
 
 ```bash
-# Auf der (Template-)VM:
+# Auf der Builder-VM:
 sudo bash vm-image/bootstrap.sh
 
 # Optional Agent-Deps vorab:
